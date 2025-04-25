@@ -1,0 +1,16 @@
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+
+# Ignore virtual environment folder
+venv/
+
+# Ignore environment variables file
+.env
+
+# VSCode settings
+.vscode/
+
+# Ignore json files
+tokens.json
+messages.json
