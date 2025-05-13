@@ -12,5 +12,4 @@ venv/
 .vscode/
 
 # Ignore json files
-tokens.json
-messages.json
+data/
