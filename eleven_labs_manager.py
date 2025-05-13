@@ -14,7 +14,7 @@ except TypeError:
 DEFAULT_VOICE = "Aria"
 MODEL = "eleven_flash_v2_5"
 DEFAULT_STABILITY = 0.5 #Ranges 0 to 1
-DEFAULT_SPEED = 0.9 #Ranges 0.7 to 1.2
+DEFAULT_SPEED = 1 #Ranges 0.7 to 1.2
 DEFAULT_SIMILARITY = 0.75 #Ranges 0 to 1
 
 class ElevenLabsManager:
@@ -26,14 +26,14 @@ class ElevenLabsManager:
 
     # Convert text to speech, then save it to file. Returns the file path
     def text_to_audio(self, input_text, voice=DEFAULT_VOICE, save_as_wave=True, subdirectory=""):
-        #client.voices.edit_settings(
-        #   voice_id=voice,
-        #   request=VoiceSettings(
-        #      stability=DEFAULT_STABILITY,
-        #      similarity_boost=DEFAULT_SIMILARITY,
-        #      speed=DEFAULT_SPEED
-        #   )
-        #)
+        client.voices.edit_settings(
+           voice_id=voice,
+           request=VoiceSettings(
+              stability=DEFAULT_STABILITY,
+              similarity_boost=DEFAULT_SIMILARITY,
+              speed=DEFAULT_SPEED
+           )
+        )
         audio_saved = client.generate(
           text=input_text,
           voice=voice,
