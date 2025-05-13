@@ -4,7 +4,8 @@ import time
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TOKENS_FILE = os.path.join(BASE_DIR, "tokens.json")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+TOKENS_FILE = os.path.join(DATA_DIR, "tokens.json")
 
 def load_tokens():
     with open(TOKENS_FILE, "r") as f:
@@ -45,6 +46,7 @@ def refresh_token(account: str, client_id, client_secret, force_refresh = False)
         tokens[account]["last_refreshed"] = int(time.time())
         save_tokens(tokens)
         token = "oauth:" + tokens[account]["access_token"]
+        print("Refreshed access token")
         return token
     else:
         raise Exception(f"Failed to refresh token: {response.status_code} - {response.text}")

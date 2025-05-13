@@ -1,17 +1,27 @@
 import time
 import azure.cognitiveservices.speech as speechsdk
 import keyboard
+import asyncio
 import os
+from json_manager import load_settings
 from dotenv import load_dotenv
 
 load_dotenv()
 
-END_LISTEN_KEY = os.getenv("END_LISTEN_KEY")
+END_LISTEN_KEY = None
 
 class SpeechToTextManager:
     azure_speechconfig = None
     azure_audioconfig = None
     azure_speechrecognizer = None
+    
+    async def set_settings():
+        settings = await load_settings()
+        global END_LISTEN_KEY
+        END_LISTEN_KEY = settings["Hotkeys"]["END_LISTEN_KEY"]
+
+    if not END_LISTEN_KEY:
+        asyncio.run(set_settings())
 
     def __init__(self):
         # Creates an instance of a speech config with specified subscription key and service region.
