@@ -1,79 +1,127 @@
 import pygame
+import pygame._sdl2.audio as sdl2_audio
 import time
 import os
 import asyncio
 import soundfile as sf
 from mutagen.mp3 import MP3
+from pydub import AudioSegment
+from bot_utils import DEBUG
+
+AUDIO_DEVICES = []
 
 class AudioManager:
-
     def __init__(self):
-        # Use higher frequency to prevent audio glitching noises
-        # Use higher buffer because why not (default is 512)
-        pygame.mixer.init(frequency=48000, buffer=1024) 
+        self.output_device = None
+        self._should_stop = False
+        self._is_playing = False
+        self.device_object = None
+        self.init_mixer()
+
+    def init_mixer(self):
+        # Initialize mixer with or without a specific device
+        if pygame.mixer.get_init():
+            pygame.mixer.quit()
+        if self.output_device is not None:
+            pygame.mixer.init(devicename=self.output_device, frequency=48000, buffer=1024)
+        else:
+            pygame.mixer.init(frequency=48000, buffer=1024)
+
+    @staticmethod
+    def list_output_devices():
+        devices = sdl2_audio.get_audio_device_names(iscapture=False)
+        #print("[DEBUG][AudioManager] Available output devices:")
+        for idx, name in enumerate(devices):
+            AUDIO_DEVICES.append(name)
+            #print(f"[DEBUG]  {idx}: {name}")
+        return devices
+
+    def set_output_device(self, device_name_or_index):
+        devices = self.list_output_devices()
+        if isinstance(device_name_or_index, int):
+            if 0 <= device_name_or_index < len(devices):
+                self.output_device = devices[device_name_or_index]
+            else:
+                print(f"[ERROR][AudioManager] Invalid device index: {device_name_or_index}")
+                return
+        elif isinstance(device_name_or_index, str):
+            if device_name_or_index in devices:
+                self.output_device = device_name_or_index
+            else:
+                print(f"[ERROR][AudioManager] Device '{device_name_or_index}' not found.")
+                return
+        else:
+            print("[ERROR][AudioManager] Invalid device identifier.")
+            return
+        self.init_mixer()
+
+    def stop_playback(self):
+        self._should_stop = True
+        self._is_playing = False
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.stop()
+        except Exception as e:
+            print(f"[ERROR]{e} - Could not stop playback.")
+
+    def is_playing(self):
+        return self._is_playing
 
     def play_audio(self, file_path, sleep_during_playback=True, delete_file=False, play_using_music=True):
-        """
-        Parameters:
-        file_path (str): path to the audio file
-        sleep_during_playback (bool): means program will wait for length of audio file before returning
-        delete_file (bool): means file is deleted after playback (note that this shouldn't be used for multithreaded function calls)
-        play_using_music (bool): means it will use Pygame Music, if false then uses pygame Sound instead
-        """
-        print(f"Playing file with pygame: {file_path}")
-        if not pygame.mixer.get_init(): # Reinitialize mixer if needed
-            pygame.mixer.init(frequency=48000, buffer=1024) 
-        if play_using_music:
-            # Pygame Music can only play one file at a time
-            pygame.mixer.music.load(file_path)
-            pygame.mixer.music.play()
-        else:
-            # Pygame Sound lets you play multiple sounds simultaneously
-            pygame_sound = pygame.mixer.Sound(file_path) 
-            pygame_sound.play()
-
-        if sleep_during_playback:
-            # Calculate length of the file, based on the file format
-            _, ext = os.path.splitext(file_path) # Get the extension of this file
-            if ext.lower() == '.wav':
-                wav_file = sf.SoundFile(file_path)
-                file_length = wav_file.frames / wav_file.samplerate
-                wav_file.close()
-            elif ext.lower() == '.mp3':
-                mp3_file = MP3(file_path)
-                file_length = mp3_file.info.length
+        try:
+            self._is_playing = True
+            if not pygame.mixer.get_init():
+                self.init_mixer()
+            if play_using_music:
+                pygame.mixer.music.load(file_path)
+                pygame.mixer.music.play()
             else:
-                print("Cannot play audio, unknown file type")
-                return
+                pygame_sound = pygame.mixer.Sound(file_path)
+                pygame_sound.play()
 
-            # Sleep until file is done playing
-            time.sleep(file_length)
+            if sleep_during_playback:
+                _, ext = os.path.splitext(file_path)
+                if ext.lower() == '.wav':
+                    wav_file = sf.SoundFile(file_path)
+                    file_length = wav_file.frames / wav_file.samplerate
+                    wav_file.close()
+                elif ext.lower() == '.mp3':
+                    mp3_file = MP3(file_path)
+                    file_length = mp3_file.info.length
+                else:
+                    print("[WARNING]Cannot play audio, unknown file type")
+                    return
 
-            # Delete the file
+                elapsed = 0
+                interval = 0.1
+                while elapsed < file_length:
+                    if self._should_stop:
+                        print("[WARNING][AudioManager] Playback interrupted!")
+                        self._should_stop = False
+                        break
+                    time.sleep(interval)
+                    elapsed += interval
+            self._is_playing = False
             if delete_file:
-                # Stop Pygame so file can be deleted
-                # Note: this will stop the audio on other threads as well, so it's not good if you're playing multiple sounds at once
-                pygame.mixer.music.stop()
-                pygame.mixer.quit()
-                try:  
+                try:
+                    pygame.mixer.music.stop()
+                except:
+                    pass
+                try:
                     os.remove(file_path)
-                    print(f"Deleted the audio file.")
-                except PermissionError:
-                    print(f"Couldn't remove {file_path} because it is being used by another process.")
+                    if DEBUG:
+                        print(f"[DEBUG][AudioManager] Deleted file: {file_path}")
+                except Exception as e:
+                    print(f"[WARNING][AudioManager] Could not delete {file_path}: {e}")
+        except Exception as e:
+            print(f"[ERROR][AudioManager] Error playing audio: {e}")
 
     async def play_audio_async(self, file_path):
-        """
-        Parameters:
-        file_path (str): path to the audio file
-        """
-        print(f"Playing file with asynchronously with pygame: {file_path}")
-        if not pygame.mixer.get_init(): # Reinitialize mixer if needed
-            pygame.mixer.init(frequency=48000, buffer=1024) 
-        pygame_sound = pygame.mixer.Sound(file_path) 
+        if not pygame.mixer.get_init():
+            self.init_mixer()
+        pygame_sound = pygame.mixer.Sound(file_path)
         pygame_sound.play()
-
-        # Calculate length of the file, based on the file format
-        _, ext = os.path.splitext(file_path) # Get the extension of this file
+        _, ext = os.path.splitext(file_path)
         if ext.lower() == '.wav':
             wav_file = sf.SoundFile(file_path)
             file_length = wav_file.frames / wav_file.samplerate
@@ -82,64 +130,34 @@ class AudioManager:
             mp3_file = MP3(file_path)
             file_length = mp3_file.info.length
         else:
-            print("Cannot play audio, unknown file type")
+            print("[WARNING]Cannot play audio, unknown file type")
             return
-
-        # We must use asyncio.sleep() here because the normal time.sleep() will block the thread, even if it's in an async function
         await asyncio.sleep(file_length)
 
+    async def process_audio(self, audio_file):
+        audio = AudioSegment.from_mp3(audio_file)
+        frame_ms = 50
+        frames = [audio[i:i+frame_ms] for i in range(0, len(audio), frame_ms)]
+        volumes = [frame.rms for frame in frames]
+        return volumes, len(audio)
 
-# TESTS
+    async def map_volume_to_y(self, vol, min_vol, max_vol, base_y = 800, max_bounce = 25):
+        if max_vol - min_vol == 0:
+            return base_y
+        normalized = (vol - min_vol) / (max_vol - min_vol)
+        bounce = normalized * max_bounce
+        return base_y - bounce
+
+# Example usage:
 if __name__ == '__main__':
     audio_manager = AudioManager()
+    devices = audio_manager.list_output_devices()
+    if devices:
+        # Set to the first available device for demo
+        audio_manager.set_output_device(0)
     MP3_FILEPATH = "TestAudio_MP3.mp3"
     WAV_FILEPATH = "TestAudio_WAV.wav"
-
-    if not os.path.exists(MP3_FILEPATH) or not os.path.exists(WAV_FILEPATH):
-        exit("Missing test audio")
-    
-    # MP3 Test
-    audio_manager.play_audio(MP3_FILEPATH)
-    print("Sleeping until next file")
-    time.sleep(3)
-
-    # Lots of MP3s at once test
-    x = 10
-    while x > 0:
-        audio_manager.play_audio(MP3_FILEPATH,False,False,False)
-        time.sleep(0.1)
-        x -= 1
-    print("Sleeping until next file")
-    time.sleep(3)
-
-    # Wav file tests
-    audio_manager.play_audio(WAV_FILEPATH)
-    print("Sleeping until next file")
-    time.sleep(3)
-
-    # Lots of WAVs at once test
-    x = 10
-    while x > 0:
-        audio_manager.play_audio(WAV_FILEPATH,False,False,False)
-        time.sleep(0.1)
-        x -= 1
-    print("Sleeping until next file")
-    time.sleep(3)
-
-    # Async tests
-    async def async_audio_test():
-        await audio_manager.play_audio_async(MP3_FILEPATH)
-        time.sleep(1)
-        await audio_manager.play_audio_async(WAV_FILEPATH)
-        time.sleep(1)
-    print("Playing async audio")
-    asyncio.run(async_audio_test())
-
-    # Deleting file tests
-    # audio_manager.play_audio(MP3_FILEPATH, True, True)
-    # print("Sleeping until next file")
-    # time.sleep(3)
-    # audio_manager.play_audio(WAV_FILEPATH, True, True)
-    # print("Sleeping until next file")
-    # time.sleep(3)
-    
+    if os.path.exists(MP3_FILEPATH):
+        audio_manager.play_audio(MP3_FILEPATH)
+    if os.path.exists(WAV_FILEPATH):
+        audio_manager.play_audio(WAV_FILEPATH)
