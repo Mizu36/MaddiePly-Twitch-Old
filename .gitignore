@@ -13,3 +13,8 @@ venv/
 
 # Ignore json files
 data/
+audio/
+
+TODO.txt
+
+bot_icon.ico
