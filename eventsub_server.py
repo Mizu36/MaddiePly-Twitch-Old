@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from twitchAPI.twitch import Twitch
 from twitchAPI.eventsub.websocket import EventSubWebsocket
 from twitchAPI.object.eventsub import ChannelRaidEvent, ChannelCheerEvent, ChannelSubscribeEvent, ChannelPointsCustomRewardRedemptionAddEvent, ChannelPointsAutomaticRewardRedemptionAddEvent, ChannelSubscriptionGiftEvent, ChannelSubscriptionMessageEvent
@@ -6,8 +7,8 @@ from twitchAPI.type import AuthScope
 from dotenv import load_dotenv
 import os
 from token_manager import refresh_token, get_refresh_token
-from json_manager import load_prompts, save_quotes, load_settings
-from bot_utils import get_bot_instance
+from json_manager import load_settings
+from bot_utils import get_bot_instance, DEBUG
 from openai_chat import OpenAiManager
 from eleven_labs_manager import ElevenLabsManager
 from audio_player import AudioManager
@@ -35,7 +36,12 @@ async def on_subscribe(event: ChannelSubscribeEvent) -> None:
 
 async def on_raid(event: ChannelRaidEvent) -> None:
     raid = event.event
-    await get_bot_instance().handle_raid(raid)
+    channel_id = raid.from_broadcaster_user_id
+    game_name = None
+    for channel_info in await twitch.get_channel_information(channel_id):
+        game_name = getattr(channel_info, "game_name", None)
+        break
+    await get_bot_instance().handle_raid(raid, game_name)
 
 async def on_points(event: ChannelPointsAutomaticRewardRedemptionAddEvent) -> None:
     redemption = event.event
@@ -50,7 +56,8 @@ async def on_bits(event: ChannelCheerEvent) -> None:
     await get_bot_instance().handle_bits(cheer)
 
 async def on_gift_sub(event: ChannelSubscriptionGiftEvent) -> None:
-    print("GIFT SUB")
+    if DEBUG:
+        print("[DEBUG]GIFT SUB")
     gift = event.event
     count = gift.total
     cumulative = gift.cumulative_total
@@ -61,15 +68,61 @@ async def on_gift_sub(event: ChannelSubscriptionGiftEvent) -> None:
     await get_bot_instance().handle_gift_subscription(gifter_name = gifter_name, gift_count = count, gift_cumulative = cumulative)
 
 async def on_sub_message(event: ChannelSubscriptionMessageEvent) -> None:
+    if DEBUG:
+        print(f"[DEBUG]On_sub_message: {event}")
     sub_message = event.event
+    if DEBUG:
+        print(f"[DEBUG]On_sub_message: {sub_message}")
     await get_bot_instance().handle_subscription_message(sub_message)
 
+def dict_to_namespace(d):
+    if isinstance(d, dict):
+        return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
+    elif isinstance(d, list):
+        return [dict_to_namespace(i) for i in d]
+    return d
+
+ad_reset_event = asyncio.Event()
+
+async def start_ad_timer():
+    global ad_reset_event
+    while True:
+        settings = await load_settings()
+        if settings["Auto Ad Enabled"]:
+            timer_goal = int(settings["Ad Interval (minutes)"])
+            if not timer_goal or timer_goal == 0:
+                if DEBUG:
+                    print("[DEBUG]Timer not set or set to 0.")
+                return
+            length = int(settings["Ad Length (seconds)"])
+            ad_reset_event.clear()
+            try:
+                await asyncio.wait_for(ad_reset_event.wait(), timeout = timer_goal * 60)
+                continue
+            except asyncio.TimeoutError:
+                await trigger_ad(length)
+                await asyncio.sleep(length)
+
+async def trigger_ad(length: int = 60):
+    settings = await load_settings()
+    length = settings["Ad Length (seconds)"]
+    broadcaster_id = settings["Broadcaster ID"]
+
+    try: 
+        result = await twitch.start_commercial(broadcaster_id = broadcaster_id, length = length)
+        if DEBUG:
+            print(f"[DEBUG] Ad triggered: {result}")
+    except Exception as e:
+        print(f"[WARNING] Failed to trigger ad: {e}")
+    
 
 class FakeEvent():
     def __init__(self, event_data):
-        self.event = type("Event", (), event_data["event"])()
+        self.event = event_data.event
 
 async def test():
+    settings = await load_settings()
+    debug = settings["Debug"]
 
     event_bits_data = {
     "subscription": {
@@ -89,9 +142,9 @@ async def test():
     },
     "event": {
         "is_anonymous": False,
-        "user_id": "1234",       # None if is_anonymous=true
-        "user_login": "mizu36",  # None if is_anonymous=true
-        "user_name": "Mizu36",   # None if is_anonymous=true
+        "user_id": "1234",
+        "user_login": "mizu36",
+        "user_name": "Mizu36",
         "broadcaster_user_id": "1337",
         "broadcaster_user_login": "moddiply",
         "broadcaster_user_name": "ModdiPly",
@@ -117,9 +170,9 @@ async def test():
     },
     "event": {
         "is_anonymous": False,
-        "user_id": None,       # None if is_anonymous=true
-        "user_login": None,  # None if is_anonymous=true
-        "user_name": None,   # None if is_anonymous=true
+        "user_id": None,
+        "user_login": None,
+        "user_name": None,
         "broadcaster_user_id": "1337",
         "broadcaster_user_login": "moddiply",
         "broadcaster_user_name": "ModdiPly",
@@ -145,9 +198,9 @@ async def test():
     },
     "event": {
         "is_anonymous": True,
-        "user_id": None,       # None if is_anonymous=true
-        "user_login": None,  # None if is_anonymous=true
-        "user_name": "Mizu36",   # None if is_anonymous=true
+        "user_id": None,
+        "user_login": None,
+        "user_name": "Mizu36",
         "broadcaster_user_id": "1337",
         "broadcaster_user_login": "moddiply",
         "broadcaster_user_name": "ModdiPly",
@@ -181,7 +234,7 @@ async def test():
         "viewers": 20
     }
 }
-    event_subscribe_message = {
+    event_subscribe_message_data = {
     "subscription": {
         "id": "f1c2a387-161a-49f9-a165-0f21d7a4e1c4",
         "type": "channel.subscription.message",
@@ -199,28 +252,25 @@ async def test():
     },
     "event": {
         "user_id": "1234",
-        "user_login": "cool_user",
-        "user_name": "Cool_User",
+        "user_login": "yahagi_shino",
+        "user_name": "Yahagi_Shino",
         "broadcaster_user_id": "1337",
-        "broadcaster_user_login": "cooler_user",
-        "broadcaster_user_name": "Cooler_User",
+        "broadcaster_user_login": "moddiply",
+        "broadcaster_user_name": "ModdiPly",
         "tier": "1000",
         "message": {
-            "text": "Love the stream! FevziGG",
+            "text": "One more month to go!",
             "emotes": [
                 {
-                    "begin": 23,
-                    "end": 30,
-                    "id": "302976485"
                 }
             ]
         },
-        "cumulative_months": 15,
-        "streak_months": 1, # None if not shared
-        "duration_months": 6
+        "cumulative_months": 47,
+        "streak_months": 47, # None if not shared
+        "duration_months": 47
     }
 }
-    event_gifted_sub = { #WORKING AS INTENDED
+    event_gifted_sub_data = { #WORKING AS INTENDED
     "subscription": {
         "id": "f1c2a387-161a-49f9-a165-0f21d7a4e1c4",
         "type": "channel.subscription.gift",
@@ -249,7 +299,7 @@ async def test():
         "is_anonymous": True
     }
 }
-    event_subscribe = {
+    event_subscribe_data = {
     "subscription": {
         "id": "f1c2a387-161a-49f9-a165-0f21d7a4e1c4",
         "type": "channel.subscribe",
@@ -276,13 +326,41 @@ async def test():
         "is_gift": False
     }
 }
-    
-    #fake_event = FakeEvent(event_bits_data)
-    #await on_bits(fake_event)
-    
-    #GIFTED_SUB WORKING AS INTENDED
-    #fake_event = FakeEvent(event_gifted_sub)
-    #await on_gift_sub(fake_event)
+    if debug:
+        event_object = dict_to_namespace(event_subscribe_message_data)
+        #fake_event = FakeEvent(event_subscribe_message)
+        await on_sub_message(event_object)
+
+        event_object = dict_to_namespace(event_bits_data)
+        #BITS WORKING AS INTENDED
+        fake_event = FakeEvent(event_object)
+        await on_bits(fake_event)
+        
+        #event_object = dict_to_namespace(event_gifted_sub_data)
+        #GIFTED_SUB WORKING AS INTENDED
+        #fake_event = FakeEvent(event_object)
+        #await on_gift_sub(fake_event)
+
+        event_object = dict_to_namespace(event_subscribe_data)
+
+        fake_event = FakeEvent(event_object)
+        await on_subscribe(fake_event)
+
+        event_object = dict_to_namespace(event_raid_data)
+
+        fake_event = FakeEvent(event_object)
+        await on_raid(fake_event)
+
+        event_object = dict_to_namespace(event_bits_no_message_data)
+
+        fake_event = FakeEvent(event_object)
+        await on_bits(fake_event)
+
+        event_object = dict_to_namespace(event_bits_anonymous_data)
+
+        fake_event = FakeEvent(event_object)
+        await on_bits(fake_event)
+
 
 
 async def main():
@@ -341,7 +419,9 @@ async def main():
     await eventsub.listen_channel_subscription_gift(channel_id, on_gift_sub)
     await eventsub.listen_channel_subscription_message(channel_id, on_sub_message)
 
-    print("Listening for Twitch EventSub WebSocket events...")
+    asyncio.create_task(start_ad_timer())
+
+    print("[green]Listening for Twitch EventSub WebSocket events...")
     await test()
     await asyncio.Future()  # keep alive
 
