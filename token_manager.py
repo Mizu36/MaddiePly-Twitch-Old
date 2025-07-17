@@ -2,6 +2,7 @@ import requests
 import json
 import time
 import os
+from bot_utils import DEBUG
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -22,7 +23,7 @@ def get_refresh_token(account: str):
 def refresh_token(account: str, client_id, client_secret, force_refresh = False):
     tokens = load_tokens()
     if account not in tokens:
-        raise ValueError(f"No token found for account '{account}'")
+        raise ValueError(f"[ERROR]No token found for account '{account}'")
     
     last_refreshed = tokens[account].get("last_refreshed", 0)
     if not force_refresh and (time.time() - last_refreshed) < 3600:
@@ -49,4 +50,4 @@ def refresh_token(account: str, client_id, client_secret, force_refresh = False)
         print("Refreshed access token")
         return token
     else:
-        raise Exception(f"Failed to refresh token: {response.status_code} - {response.text}")
+        raise Exception(f"[ERROR]Failed to refresh token: {response.status_code} - {response.text}")
