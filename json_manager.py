@@ -9,11 +9,10 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 PROMPTS_FILE = os.path.join(DATA_DIR, "prompts.json")
 RULES_FILE = os.path.join(DATA_DIR, "prompt_rules.json")
-TOP_RESPONSES_FILE = os.path.join(DATA_DIR, "top_responses.json")
-QUOTES_FILE = os.path.join(DATA_DIR, "quotes.json")
 MESSAGES_FILE = os.path.join(DATA_DIR, "messages.json")
 BANNED_WORDS_FILE = os.path.join(DATA_DIR, "banned_words.json")
-FILEPATHS = [SETTINGS_FILE, RULES_FILE, TOP_RESPONSES_FILE, MESSAGES_FILE, BANNED_WORDS_FILE, QUOTES_FILE, PROMPTS_FILE]
+SCHEDULED_MESSAGES_FILE = os.path.join(DATA_DIR, "scheduled_messages.json")
+FILEPATHS = [SETTINGS_FILE, RULES_FILE, MESSAGES_FILE, BANNED_WORDS_FILE, PROMPTS_FILE, SCHEDULED_MESSAGES_FILE]
 LISTS = [PROMPTS_FILE]
 lock = threading.Lock()
 
@@ -57,12 +56,6 @@ async def load_prompt_rules():
 async def save_prompt_rules(data): #Not used currently, external editing only
     await async_save_json(RULES_FILE, data)
 
-async def load_top_responses():
-    return await async_load_json(TOP_RESPONSES_FILE)
-        
-async def save_top_responses(data):
-    await async_save_json(TOP_RESPONSES_FILE, data)
-
 async def load_banned_words():
     return await async_load_json(BANNED_WORDS_FILE)
         
@@ -71,11 +64,14 @@ async def save_banned_words(data):
 
 async def load_prompts():
     return await async_load_json(PROMPTS_FILE)
+
+async def save_prompts(data):
+    return await async_save_json(PROMPTS_FILE, data)
         
-async def load_quotes():
-    return await async_load_json(QUOTES_FILE)
-        
-async def save_quotes(data):
-    await async_save_json(QUOTES_FILE, data)
+async def load_scheduled_messages():
+    return await async_load_json(SCHEDULED_MESSAGES_FILE)
+
+async def save_scheduled_messages(data):
+    await async_save_json(SCHEDULED_MESSAGES_FILE, data)
 
                 
