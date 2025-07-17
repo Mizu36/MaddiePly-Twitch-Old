@@ -1,8 +1,8 @@
 import os
 from openai import OpenAI
 import tiktoken
-from rich import print
 from dotenv import load_dotenv
+from bot_utils import DEBUG
 
 load_dotenv()
 
@@ -25,7 +25,7 @@ def num_of_tokens(messages, model = DEFAULT_MODEL):
       num_tokens += 2  # every reply is primed with <im_start>assistant
       return num_tokens
   except Exception:
-      raise NotImplementedError(f"""num_tokens_from_messages() is not presently implemented for model {model}.
+      raise NotImplementedError(f"""[ERROR]num_tokens_from_messages() is not presently implemented for model {model}.
       #See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens.""")
   
 
@@ -36,20 +36,20 @@ class OpenAiManager:
         try:
             self.client = OpenAI(api_key = API_KEY)
         except TypeError:
-            exit("Ooops! You forgot to set OPENAI_API_KEY in your environment!")
+            exit("[ERROR]Ooops! You forgot to set OPENAI_API_KEY in your environment!")
 
     # Asks a question with no chat history
     def chat(self, messages):
         if not messages or not isinstance(messages, list):
-            print("Didn't receive input!")
+            print("[ERROR]Didn't receive input!")
             return
 
         # Check that the prompt is under the token context limit
         if num_of_tokens(messages) > 4000:
-            print("The length of this chat question is too large for the GPT model")
+            print("[WARNING]The length of this chat question is too large for the GPT model")
             return
 
-        print("[yellow]\nAsking ChatGPT a question...")
+        print("[orange]Asking ChatGPT a question...")
         completion = self.client.chat.completions.create(
           model="gpt-4o",
           messages=messages
@@ -57,25 +57,26 @@ class OpenAiManager:
 
         # Process the answer
         openai_answer = completion.choices[0].message.content
-        print(f"[green]\n{openai_answer}\n")
+        print(f"[green]{openai_answer}")
         return openai_answer
 
     # Asks a question that includes the full conversation history
     def chat_with_history(self, prompt=""):
         if not prompt:
-            print("Didn't receive input!")
+            print("[ERROR]Didn't receive input!")
             return
 
         # Add our prompt into the chat history
         self.chat_history.append({"role": "user", "content": prompt})
 
         # Check total token limit. Remove old messages as needed
-        print(f"[coral]Chat History has a current token length of {num_of_tokens(self.chat_history)}")
+        if DEBUG:
+            print(f"[DEBUG]Chat History has a current token length of {num_of_tokens(self.chat_history)}")
         while num_of_tokens(self.chat_history) > 2000:
             self.chat_history.pop(1) # We skip the 1st message since it's the system message
-            print(f"Popped a message! New token length is: {num_of_tokens(self.chat_history)}")
+            print(f"[orange]Popped a message! New token length is: {num_of_tokens(self.chat_history)}")
 
-        print("[yellow]\nAsking ChatGPT a question...")
+        print("[orange]Asking ChatGPT a question...")
         completion = self.client.chat.completions.create(
           model="gpt-4o",
           messages=self.chat_history
@@ -86,5 +87,5 @@ class OpenAiManager:
 
         # Process the answer
         openai_answer = completion.choices[0].message.content
-        print(f"[green]\n{openai_answer}\n")
+        print(f"[green]{openai_answer}")
         return openai_answer
