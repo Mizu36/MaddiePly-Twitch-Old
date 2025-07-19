@@ -46,19 +46,26 @@ class OBSWebsocketsManager:
                 time.sleep(10)
         print("[green]Connected to OBS Websockets!\n")
 
-    def activate_assistant(self, assistant_name):
+    def activate_assistant(self, assistant_name: str, stationary_assistant_name: str):
         current_scene = self.ws.get_current_program_scene().current_program_scene_name
         scene_items = self.ws.get_scene_item_list(current_scene)
         scene_item_id = None
+        stationary = False
 
         for item in scene_items.scene_items:
             if item["sourceName"] == assistant_name:
                 scene_item_id = item["sceneItemId"]
                 break
+            elif item["sourceName"] == stationary_assistant_name:
+                scene_item_id = item["sceneItemId"]
+                stationary = True
+                break
         if not scene_item_id:
-            print(f"[ERROR]{assistant_name} not found in scene.")
+            print(f"[ERROR]{assistant_name} or {stationary_assistant_name} not found in scene.")
             return
         # Reset to off-screen first
+        if stationary: #Grabs transform in case of early cancel and returns it to the bot, no need to continue further
+            return self.ws.get_scene_item_transform(current_scene, scene_item_id)
         self.ws.set_scene_item_transform(
             current_scene,
             scene_item_id,
@@ -84,7 +91,7 @@ class OBSWebsocketsManager:
             )
             time.sleep(0.01)
 
-    def deactivate_assistant(self, assistant_name):
+    def deactivate_assistant(self, assistant_name: str, is_stationary: bool = False, original_transform = None):
         current_scene = self.ws.get_current_program_scene().current_program_scene_name
         scene_items = self.ws.get_scene_item_list(current_scene)
         scene_item_id = None
@@ -95,6 +102,41 @@ class OBSWebsocketsManager:
                 break
         if not scene_item_id:
             print(f"[ERROR]{assistant_name} not found in scene.")
+            return
+        
+        if is_stationary and original_transform:
+            try:
+                current_transform = self.ws.get_scene_item_transform(current_scene, scene_item_id)
+                current_x = current_transform.positionX
+                target_x = original_transform.positionX
+
+                step = -40 if current_x > target_x else 40
+
+                for x in range(int(current_x), int(target_x), step):
+                    self.ws.set_scene_item_transform(
+                        current_scene,
+                        scene_item_id, {
+                            "positionX": x,
+                            "positionY": original_transform.positionY,
+                            "scaleX": original_transform.scaleX,
+                            "scaleY": original_transform.scaleY
+                        }
+                    )
+                    time.sleep(0.01)
+
+                # Final snap to exact position
+                self.ws.set_scene_item_transform(
+                    current_scene,
+                    scene_item_id,
+                    {
+                        "positionX": target_x,
+                        "positionY": original_transform.positionY,
+                        "scaleX": original_transform.scaleX,
+                        "scaleY": original_transform.scaleY
+                    }
+                )
+            except Exception as e:
+                print(f"[ERROR]Returning stationary assistant to rest: {e}")
             return
 
         for x in range(1200, 2562, 40):
@@ -153,7 +195,7 @@ class OBSWebsocketsManager:
                 vol = volumes[frame_index]
                 y = await audio_manager.map_volume_to_y(vol, min_vol, max_vol, actual_base_y)
 
-                self.ws.set_scene_item_transform(
+                await asyncio.to_thread(self.ws.set_scene_item_transform,
                     scene_name,
                     scene_item_id,
                     {
@@ -167,7 +209,7 @@ class OBSWebsocketsManager:
                 await asyncio.sleep(frame_ms / 2000)  # sleep half frame to be responsive
 
             # Reset to rest position
-            self.ws.set_scene_item_transform(
+            await asyncio.to_thread(self.ws.set_scene_item_transform,
                 scene_name,
                 scene_item_id,
                 {
@@ -178,7 +220,7 @@ class OBSWebsocketsManager:
                 }
             )
         except asyncio.CancelledError:
-            self.ws.set_scene_item_transform(
+            await asyncio.to_thread(self.ws.set_scene_item_transform,
                 scene_name,
                 scene_item_id,
                 {
