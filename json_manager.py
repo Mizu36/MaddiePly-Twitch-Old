@@ -12,8 +12,9 @@ RULES_FILE = os.path.join(DATA_DIR, "prompt_rules.json")
 MESSAGES_FILE = os.path.join(DATA_DIR, "messages.json")
 BANNED_WORDS_FILE = os.path.join(DATA_DIR, "banned_words.json")
 SCHEDULED_MESSAGES_FILE = os.path.join(DATA_DIR, "scheduled_messages.json")
-FILEPATHS = [SETTINGS_FILE, RULES_FILE, MESSAGES_FILE, BANNED_WORDS_FILE, PROMPTS_FILE, SCHEDULED_MESSAGES_FILE]
-LISTS = [PROMPTS_FILE]
+COMMANDS_FILE = os.path.join(DATA_DIR, "commands.json")
+FILEPATHS = [SETTINGS_FILE, RULES_FILE, MESSAGES_FILE, BANNED_WORDS_FILE, PROMPTS_FILE, SCHEDULED_MESSAGES_FILE, COMMANDS_FILE]
+LISTS = [PROMPTS_FILE, COMMANDS_FILE, MESSAGES_FILE]
 lock = threading.Lock()
 
 def populate_data_folder():
@@ -73,5 +74,11 @@ async def load_scheduled_messages():
 
 async def save_scheduled_messages(data):
     await async_save_json(SCHEDULED_MESSAGES_FILE, data)
+
+async def load_commands():
+    return await async_load_json(COMMANDS_FILE)
+
+async def save_commands(data):
+    await async_save_json(COMMANDS_FILE, data)
 
                 
