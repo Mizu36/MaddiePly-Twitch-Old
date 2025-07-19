@@ -1,6 +1,7 @@
 import os
 from openai import OpenAI
 import tiktoken
+import asyncio
 from dotenv import load_dotenv
 from bot_utils import DEBUG
 
@@ -39,7 +40,7 @@ class OpenAiManager:
             exit("[ERROR]Ooops! You forgot to set OPENAI_API_KEY in your environment!")
 
     # Asks a question with no chat history
-    def chat(self, messages):
+    async def chat(self, messages):
         if not messages or not isinstance(messages, list):
             print("[ERROR]Didn't receive input!")
             return
@@ -50,18 +51,21 @@ class OpenAiManager:
             return
 
         print("[orange]Asking ChatGPT a question...")
-        completion = self.client.chat.completions.create(
-          model="gpt-4o",
-          messages=messages
-        )
+
+        def blocking_call():
+            return self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages
+                )
 
         # Process the answer
+        completion = await asyncio.to_thread(blocking_call)
         openai_answer = completion.choices[0].message.content
         print(f"[green]{openai_answer}")
         return openai_answer
 
     # Asks a question that includes the full conversation history
-    def chat_with_history(self, prompt=""):
+    async def chat_with_history(self, prompt=""):
         if not prompt:
             print("[ERROR]Didn't receive input!")
             return
@@ -77,12 +81,15 @@ class OpenAiManager:
             print(f"[orange]Popped a message! New token length is: {num_of_tokens(self.chat_history)}")
 
         print("[orange]Asking ChatGPT a question...")
-        completion = self.client.chat.completions.create(
-          model="gpt-4o",
-          messages=self.chat_history
-        )
+        def blocking_call():
+            return self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=self.chat_history
+                )
 
         # Add this answer to our chat history
+        completion = await asyncio.to_thread(blocking_call)
+        
         self.chat_history.append({"role": completion.choices[0].message.role, "content": completion.choices[0].message.content})
 
         # Process the answer
