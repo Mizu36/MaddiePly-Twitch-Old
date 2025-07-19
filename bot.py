@@ -21,7 +21,7 @@ from obs_websockets import OBSWebsocketsManager
 from bot_utils import set_bot_instance, get_bot_instance, set_debug
 from eventsub_server import main as start_event_sub, ad_reset_event, trigger_ad
 from token_manager import refresh_token
-from json_manager import load_prompts, load_messages, save_messages, load_settings, save_settings, load_scheduled_messages, save_scheduled_messages
+from json_manager import load_prompts, load_messages, save_messages, load_settings, save_settings, load_scheduled_messages, save_scheduled_messages, load_commands
 
 load_dotenv()
 
@@ -55,6 +55,7 @@ RESUB_SUPERVISOR = {}
 RESUB_TENURED = {}
 GIFT_CACHE = {}
 TIMED_MESSAGES = []
+COMMANDS = {}
 RAID_THRESHOLD = None
 INTERN_MONTHS = None
 EMPLOYEE_MONTHS = None
@@ -73,6 +74,7 @@ PAUSE_EVENT_QUEUE = False
 CURRENT_EVENT = None
 AUTO_AD_ENABLED = None
 NUMBER_OF_EVENTS_IN_QUEUE = 0
+SAVE_MESSAGE_QUEUE = []
 
 openai_manager = OpenAiManager()
 openai_client = OpenAI(api_key = OPENAI_API_KEY)
@@ -86,7 +88,6 @@ pygame.init()
 global_bot_instance = None
 gui_queue = queue.Queue()
 hotkey_queue = queue.Queue()
-
 
 async def pass_bot_instance():
     bot = get_bot_instance()
@@ -119,6 +120,7 @@ async def set_global_variables():
     global ASSISTANT_NAME
     global STATIONARY_ASSISTANT_NAME
     global AUTO_AD_ENABLED
+    global COMMANDS
     settings = await load_settings()
     DEBUG = settings["Debug"]
     set_debug(DEBUG)
@@ -145,15 +147,25 @@ async def set_global_variables():
     ASSISTANT_NAME = settings["OBS Assistant Object Name"]
     STATIONARY_ASSISTANT_NAME = settings["OBS Assistant Stationary Object Name"]
     AUTO_AD_ENABLED = settings["Auto Ad Enabled"]
+    COMMANDS = await load_commands()
     BOT_TOKEN = refresh_token("bot", CLIENT_ID, CLIENT_SECRET)
 
-async def save_message(author, content):
-    messages = await load_messages()
-    formatted_message = f"{author}: {content}"
-    messages.append(formatted_message)
-    if len(messages) > 10:
-        messages.pop(0)
-    await save_messages(messages)
+async def save_message_loop():
+    while True:
+        if SAVE_MESSAGE_QUEUE:
+            if SAVE_MESSAGE_QUEUE[0] == "empty":
+                await save_messages([])
+                continue
+            else:
+                message = SAVE_MESSAGE_QUEUE[0]
+                SAVE_MESSAGE_QUEUE.pop(0)
+                messages = await load_messages()
+                messages.append(f"{message.get("author", "There was an error retrieving the author.")}: {message.get("text", "There was an error retrieving the message.")}")
+                if len(messages) > 25:
+                    messages.pop(0)
+                await save_messages(messages)
+        else:
+            await asyncio.sleep(0.5)
 
 async def set_prompts():
     prompts = await load_prompts()
@@ -189,6 +201,7 @@ def global_hotkey_listener(hotkey_queue, settings):
         "PLAY_NEXT_KEY": settings["Hotkeys"]["PLAY_NEXT_KEY"],
         "SKIP_CURRENT_KEY": settings["Hotkeys"]["SKIP_CURRENT_KEY"],
         "REPLAY_LAST_KEY": settings["Hotkeys"]["REPLAY_LAST_KEY"],
+        "PAUSE_QUEUE": settings["Hotkeys"]["PAUSE_QUEUE"]
     }
     for name, combo in hotkey_map.items():
         if combo:  # Only register if combo is not empty
@@ -206,31 +219,36 @@ async def respond_to_messages():
     messages_str = "\n".join(messages)
     prompt = [MESSAGE_RESPOND_PROMPT, 
               {"role": "user", "content": messages_str}]
-    response = openai_manager.chat(prompt)
+    chatGPT = asyncio.create_task(openai_manager.chat(prompt))
     channel = global_bot_instance.get_channel(twitch_channel)
+    response = await chatGPT
     await channel.send(response)
-    await save_messages([])
+    SAVE_MESSAGE_QUEUE.insert(0, "empty") #Empties message json after this is triggered
     return
 
 async def ask_maddieply():
     if DEBUG:
         print("[DEBUG]ask_maddie triggered")
     print ("[green]Now listening to your microphone:")
-
+    started_paused = False
     global PAUSE_EVENT_QUEUE, CURRENT_EVENT
+    if PAUSE_EVENT_QUEUE:
+        started_paused = True
     PAUSE_EVENT_QUEUE = True
 
     mic_result = tts_manager.speechtotext_from_mic_continuous()
 
     if not mic_result or not mic_result.strip():
         print ("[red]Did not receive any input from your microphone!")
-        PAUSE_EVENT_QUEUE = False
+        if not started_paused:
+            PAUSE_EVENT_QUEUE = False
         return
 
-    response = openai_manager.chat_with_history(mic_result)
+    chatGPT = asyncio.create_task(openai_manager.chat_with_history(mic_result))
 
     settings = await load_settings()
     model = settings["Elevenlabs Synthesizer Model"]
+    response = await chatGPT
 
     try:
         output = elevenlabs_manager.text_to_audio(response, ELEVENLABS_VOICE, False, model=model)
@@ -249,25 +267,30 @@ async def ask_maddieply():
         if DEBUG:
             print(f"[ERROR]Error in assistant response: {e}")
     finally:
-        PAUSE_EVENT_QUEUE = False
+        if not started_paused:
+            PAUSE_EVENT_QUEUE = False
         CURRENT_EVENT = None
 
 async def summarize_chat():
     if DEBUG:
         print("[DEBUG]summarize_chat triggered")
 
+    started_paused = False
     global PAUSE_EVENT_QUEUE, CURRENT_EVENT
+    if PAUSE_EVENT_QUEUE:
+        started_paused = True
     PAUSE_EVENT_QUEUE = True
 
     messages = await load_messages()
     messages_str = "\n".join(messages)
     full_prompt = [SUMMARIZE_PROMPT,
                    {"role": "user", "content": messages_str}]
-    response = openai_manager.chat(full_prompt)
+    chatGPT = asyncio.create_task(openai_manager.chat(full_prompt))
 
     settings = await load_settings()
     model = settings["Elevenlabs Synthesizer Model"]
 
+    response = await chatGPT
     try:
         output = elevenlabs_manager.text_to_audio(response, ELEVENLABS_VOICE, False, model=model)
     except Exception as e:
@@ -284,7 +307,8 @@ async def summarize_chat():
         if DEBUG:
             print(f"[ERROR]Error in assistant response: {e}")
     finally:
-        PAUSE_EVENT_QUEUE = False
+        if not started_paused:
+            PAUSE_EVENT_QUEUE = False
         CURRENT_EVENT = None
 
 async def cleanup_gift_cache():
@@ -295,7 +319,7 @@ async def cleanup_gift_cache():
             del GIFT_CACHE[k]
         await asyncio.sleep(10)
 
-async def process_hotkey_queue(bot, hotkey_queue):
+async def process_hotkey_queue(bot, hotkey_queue): #Async loop
     while True:
         global PLAY_NEXT_PRESSED
         global PAUSE_EVENT_QUEUE
@@ -308,7 +332,12 @@ async def process_hotkey_queue(bot, hotkey_queue):
 
         print(f"[DEBUG]Hotkey pressed {hotkey}")
         # Map hotkey names to bot actions
-        if hotkey == "10_MESSAGES_RESPOND_KEY":
+        if hotkey == "PAUSE_QUEUE" and EVENT_QUEUE_ENABLED:
+            global PAUSE_EVENT_QUEUE
+            PAUSE_EVENT_QUEUE = True
+            print("[yellow]Event Queue paused!")
+            #May alter scene object using obs_websockets in future
+        elif hotkey == "10_MESSAGES_RESPOND_KEY":
             await respond_to_messages()
         elif hotkey == "LISTEN_AND_RESPOND_KEY":
             await ask_maddieply()
@@ -330,7 +359,7 @@ async def process_hotkey_queue(bot, hotkey_queue):
                 await CURRENT_EVENT
             except asyncio.CancelledError:
                 if DEBUG:
-                    print("[DEBUG] CURRENT_EVENT was cancelled.")
+                    print("[DEBUG]CURRENT_EVENT was cancelled.")
             except Exception as e:
                 if DEBUG:
                     print(f"[ERROR]Error in assistant response: {e}")
@@ -350,21 +379,20 @@ def delete_all_audio_files(folder_path: str):
         for file_path in glob.glob(os.path.join(folder_path, ext)):
             os.remove(file_path)
 
-async def purge_old_voice_responses(purge_all: bool):
-    if purge_all:
-        delete_all_audio_files(AUDIO_FOLDER)
-    else:
-        audio_files = []
-        for ext in ("*.mp3", "*.wav"):
-            audio_files.extend(glob.glob(os.path.join(AUDIO_FOLDER, ext)))
-
-        if len(audio_files) <= 5:
-            return
-        
-        audio_files.sort(key = os.path.getmtime)
-
-        for file_path in audio_files[:-5]:
-            os.remove(file_path)
+async def purge_old_voice_responses():
+    delete_all_audio_files(AUDIO_FOLDER)
+    #else:
+    #    audio_files = []
+    #    for ext in ("*.mp3", "*.wav"):
+    #        audio_files.extend(glob.glob(os.path.join(AUDIO_FOLDER, ext)))
+    #
+    #    if len(audio_files) <= 5:
+    #        return
+    #    
+    #    audio_files.sort(key = os.path.getmtime)
+    #
+    #    for file_path in audio_files[:-5]:
+    #        os.remove(file_path)
 
 class EventQueue:
     def __init__(self):
@@ -418,20 +446,48 @@ class EventQueue:
             return event["audio"]
         return None
     
+    def play_event(self, event_index: int):
+        print("Play_event entered")
+        if self.queue and not self.is_playing:
+            global NUMBER_OF_EVENTS_IN_QUEUE
+            print("Self.queue not empty, and self.is_playing is false")
+            self.is_playing = True
+            event = self.queue[event_index]
+            audio = event["audio"]
+            print(f"Retrieved audio: {audio}")
+            NUMBER_OF_EVENTS_IN_QUEUE -= 1
+            self.played.append(event)
+            self.queue.pop(event_index)
+            return audio
+        return False
+    
     def replay_event(self, event_index: int): #Used to replay an event selected from GUI
-        if self.played:
+        if self.played and not self.is_playing:
             self.is_playing = True
             event = self.played[event_index]
             return event["audio"]
         return False
     
-    def remove_event(self, event_index: int): #Used to remove an event from the queue using the GUI
-        self.queue.pop(event_index)
+    def remove_event(self, event_index: int, previous_event: bool): #Used to remove an event from the queue using the GUI
+        if not previous_event:
+            audio = self.queue[event_index]["audio"]
+            self.queue.pop(event_index)
+        else:
+            audio = self.played[event_index]["audio"]
+            self.played.pop(event_index)
+        return audio
+
 
     def get_event(self, event_index: int):
         if 0 <= event_index < len(self.queue):
             return self.queue[event_index]
         return None
+    
+    def get_queue(self):
+        return self.queue
+    
+    def get_played(self):
+        return self.played
     
     def clear(self):
         self.queue.clear()
@@ -448,9 +504,10 @@ class Bot(commands.Bot):
 
     async def event_ready(self):
         print(f"[green]Bot {self.nick} is online!")
-        asyncio.create_task(purge_old_voice_responses(True))
+        asyncio.create_task(purge_old_voice_responses())
         asyncio.create_task(self.start_automated_messages())
         asyncio.create_task(self.event_loop())
+        asyncio.create_task(save_message_loop())
         settings = await load_settings()
         device = settings["Audio Output Device"]
         if device:
@@ -538,6 +595,40 @@ class Bot(commands.Bot):
                     print("[DEBUG]Event queue is paused, skipping processing.")
                 await asyncio.sleep(0.5)
                 continue
+    
+    async def play_specific_event(self, event_index, is_replay):
+        while self.event_queue.is_playing:
+            await asyncio.sleep(0.1)
+        was_paused = False
+        global PAUSE_EVENT_QUEUE, CURRENT_EVENT
+        if PAUSE_EVENT_QUEUE:
+            was_paused = True
+        PAUSE_EVENT_QUEUE = True
+        if is_replay:
+            audio = self.event_queue.replay_event(event_index)
+        else:
+            audio = self.event_queue.play_event(event_index)
+            
+        CURRENT_EVENT = asyncio.create_task(self.assistant_responds(audio))
+        try:
+            await CURRENT_EVENT
+        except asyncio.CancelledError:
+            if DEBUG:
+                print(f"[DEBUG]{"Replay" if is_replay else "Play specific"} event cancelled.")
+        except Exception as e:
+            print(f"[ERROR][EventQueue] Error processing audio: {e}")
+        finally:
+            self.event_queue.is_playing = False
+            CURRENT_EVENT = None
+            if not was_paused:
+                PAUSE_EVENT_QUEUE = False
+
+    async def remove_specific_event(self, event_index: int, is_repeat: bool):
+        audio = self.event_queue.remove_event(event_index, True if is_repeat else False)
+        try:
+            os.remove(audio)
+        except:
+            print("[ERROR]Failed to delete audio file, will be purged on next startup.")
 
     async def reload_global_variable(self):
         settings = await load_settings()
@@ -571,6 +662,8 @@ class Bot(commands.Bot):
         AUTO_AD_ENABLED = settings["Auto Ad Enabled"]
         device = settings["Audio Output Device"]
         audio_manager.set_output_device(device)
+        if DEBUG:
+            print("[green]Reloaded global variables into memory.")
 
     async def reload_global_prompts(self):
         prompts = await load_prompts()
@@ -596,9 +689,16 @@ class Bot(commands.Bot):
         RESUB_EMPLOYEE = {"role": "system", "content": (prompts["Resub Employee"])}
         RESUB_SUPERVISOR = {"role": "system", "content": (prompts["Resub Supervisor"])}
         RESUB_TENURED = {"role": "system", "content": (prompts["Resub Tenured Employee"])}
+        if DEBUG:
+            print("[green]Reloaded global prompts into memory.")
+
+    async def reload_commands(self):
+        global COMMANDS
+        COMMANDS = await load_commands()
+        if DEBUG:
+            print("[green]Reloaded commands into memory.")
 
     async def toggle_debug(self):
-        print("entered toggle_debug in bot.py")
         settings = await load_settings()
         global DEBUG
         print(DEBUG)
@@ -616,14 +716,14 @@ class Bot(commands.Bot):
                 # Time-only trigger
                 while True:
                     await asyncio.sleep(minutes * 60)
-                    await global_bot_instance.send_message(text)
+                    await self.send_message(text)
 
             elif messages and not minutes:
                 # Message-count-only trigger
                 while True:
                     await asyncio.sleep(1)
                     if counter["count"] >= messages:
-                        await global_bot_instance.send_message(text)
+                        await self.send_message(text)
                         counter["count"] = 0
 
             elif messages and minutes:
@@ -631,7 +731,7 @@ class Bot(commands.Bot):
                 while True:
                     await asyncio.sleep(minutes * 60)
                     if counter["count"] >= messages:
-                        await global_bot_instance.send_message(text)
+                        await self.send_message(text)
                         counter["count"] = 0
                     else:
                         if DEBUG:
@@ -741,26 +841,33 @@ class Bot(commands.Bot):
                 return f"[ERROR] Failed to parse ElevenLabs exception: {parse_error}"
         return str(exception)
 
-    async def assistant_responds(self, output):
+    async def assistant_responds(self, output): #This will need to be adjusted to account for stationary maddie
         try:
-            obswebsockets_manager.activate_assistant(ASSISTANT_NAME)
+            audio_process = asyncio.create_task(audio_manager.process_audio(output))
+            original_transform = obswebsockets_manager.activate_assistant(ASSISTANT_NAME, STATIONARY_ASSISTANT_NAME)
+            wait = asyncio.sleep(1)
 
-            volumes, total_duration_ms = await audio_manager.process_audio(output)
+            volumes, total_duration_ms = await audio_process
             min_vol = min(volumes)
             max_vol = max(volumes)
 
+            await wait
             bounce_task = asyncio.create_task(obswebsockets_manager.bounce_while_talking(volumes, min_vol, max_vol, total_duration_ms, ASSISTANT_NAME, STATIONARY_ASSISTANT_NAME))
             loop = asyncio.get_running_loop()
 
             await loop.run_in_executor(None, audio_manager.play_audio, output, True, False, True)
             await bounce_task
 
+            await asyncio.sleep(1)
             obswebsockets_manager.deactivate_assistant(ASSISTANT_NAME)
         except asyncio.CancelledError:
             if DEBUG:
                 print("[DEBUG]Event was cancelled.")
                 bounce_task.cancel()
-                obswebsockets_manager.deactivate_assistant(ASSISTANT_NAME)
+                if original_transform:
+                    obswebsockets_manager.deactivate_assistant(STATIONARY_ASSISTANT_NAME, True, original_transform)
+                else:
+                    obswebsockets_manager.deactivate_assistant(ASSISTANT_NAME)
                 raise
 
     async def handle_raid(self, event, game_name = None):#May need to adjust code to incoporate already existing policies.
@@ -773,18 +880,19 @@ class Bot(commands.Bot):
         if viewer_count >= RAID_THRESHOLD:
             prompt_2 = {"role": "user", "content": f"{user_name} has raided with {viewer_count} viewers! Last seen playing {game_name}!"}
             full_prompt = [RAID, prompt_2]
-            response = openai_manager.chat(full_prompt)
+            chatGPT = asyncio.create_task(openai_manager.chat(full_prompt))
 
             settings = await load_settings()
             model = settings["Elevenlabs Synthesizer Model"]
 
+            response = await chatGPT
             try:
                 output = elevenlabs_manager.text_to_audio(response, ELEVENLABS_VOICE, False, model=model)
             except Exception as e:
                 print(await self.parse_elevenlabs_exception(e))
                 voice = settings["Azure TTS Backup Voice"]
                 output = tts_manager.text_to_speech(response, voice)
-            queued_event = {"type": "event", "audio": output, "from_user": event.from_broadcaster_user_name, "event_type": "raid"}
+            queued_event = {"type": "event", "audio": output, "from_user": event.from_broadcaster_user_name, "event_type": "Raid"}
             self.event_queue.add_event(queued_event)
     
     #Not currently used, but may be useful in the future
@@ -854,11 +962,12 @@ class Bot(commands.Bot):
                 prompt_2 = {"role": "user", "content": f"{gifter_name} gifted {count} subs to: {recipients_str}."}
             
             full_prompt = [GIFTED_SUB, prompt_2]
-            response = openai_manager.chat(full_prompt)
+            chatGPT = asyncio.create_task(openai_manager.chat(full_prompt))
 
             settings = await load_settings()
             model = settings["Elevenlabs Synthesizer Model"]
 
+            response = await chatGPT
             try:
                 output = elevenlabs_manager.text_to_audio(response, ELEVENLABS_VOICE, False, model=model)
             except Exception as e:
@@ -913,7 +1022,9 @@ class Bot(commands.Bot):
             else:
                 prompt_2 = {"role": "system", "content": f"{user_name} resubscribed for {duration_months} months! Tier {tier} with message: {message}"}
         full_prompt = [resub, prompt_2]
-        response = openai_manager.chat(full_prompt)
+        chatGPT = asyncio.create_task(openai_manager.chat(full_prompt))
+
+        response = await chatGPT
         full_response = f"{user_name} says: {message}. {response}"
 
         settings = await load_settings()
@@ -975,11 +1086,12 @@ class Bot(commands.Bot):
                     prompt_2 = {"role": "system", "content": f"{username} donated {bits} to {broadcaster_name}.\n{username}'s message: {message}."}
             
             full_prompt = [prompt_1, prompt_2]
-            response = openai_manager.chat(full_prompt)
+            chatGPT = asyncio.create_task(openai_manager.chat(full_prompt))
 
             settings = await load_settings()
             model = settings["Elevenlabs Synthesizer Model"]
 
+            response = await chatGPT
             if message:
                 full_response = f"'{message}.' {response}"
                 try:
@@ -1002,38 +1114,44 @@ class Bot(commands.Bot):
     async def event_message(self, message):
         if message.echo:
             return
-        
-        for msg in TIMED_MESSAGES:
-            if "counter" in msg:
-                msg["counter"]["count"] += 1
 
+        asyncio.create_task(self.handle_message(message))
 
-        match_regular = re.match(r"^(.+?) gifted a Tier (\d) Sub to (.+?)!$", message.content)
-        match_anon = re.match(r"^An anonymous gifter gave (.+?) a Tier (\d) Sub!$", message.content)
-        if match_regular:
-            gifter = match_regular.group(1)
-            tier = match_regular.group(2)
-            recipient = match_regular.group(3).strip()
-            await global_bot_instance.handle_gift_subscription(gifter_name = gifter, recipient_list = [recipient], tier = tier)
-        elif match_anon:
-            gifter = "Anonymous"
-            recipient = match_anon.group(1).strip()
-            tier = match_anon.group(2)
-            await global_bot_instance.handle_gift_subscription(gifter_name = gifter, recipient_list = [recipient], tier = tier)
-        print(f"{message.author.name}: {message.content}")
-        await save_message(message.author.name, message.content)
-        await self.handle_commands(message)
+    async def handle_message(self, message):
+        text: str = message.content
+        first_msg = message.tags.get('first-msg')
+        if first_msg == '1':
+            if DEBUG:
+                print(f"{message.author.name} is a first time chatter.")
+        else:
+            if DEBUG:
+                print(f"{message.author.name}'s first-msg tag == {first_msg}. Here is a print out of the tags {message.tags}")
+        if text.startswith("!"):
+            if text.lower() in COMMANDS.keys():
+                response = COMMANDS.get(text.lower())
+                await self.send_message(response)
+                return
+        else:
+            for msg in TIMED_MESSAGES:
+                if "counter" in msg:
+                    msg["counter"]["count"] += 1
+            match_regular = re.match(r"^(.+?) gifted a Tier (\d) Sub to (.+?)!$", message.content)
+            match_anon = re.match(r"^An anonymous gifter gave (.+?) a Tier (\d) Sub!$", message.content)
+            if match_regular:
+                gifter = match_regular.group(1)
+                tier = match_regular.group(2)
+                recipient = match_regular.group(3).strip()
+                await self.handle_gift_subscription(gifter_name = gifter, recipient_list = [recipient], tier = tier)
+                return
+            elif match_anon:
+                gifter = "Anonymous"
+                recipient = match_anon.group(1).strip()
+                tier = match_anon.group(2)
+                await self.handle_gift_subscription(gifter_name = gifter, recipient_list = [recipient], tier = tier)
+                return
 
-    @commands.command(name="test")
-    @cooldown(1, 30, Bucket.user)
-    async def test(self, ctx):
-        if DEBUG:
-            print("[DEBUG]triggered repeat")
-        try:
-            await ctx.send("This is a test message.")
-        except Exception as e:
-            # Handle the cooldown error
-            print(f"{ctx.author.name} tried to use the !test command too soon.")
+            author = message.author
+            SAVE_MESSAGE_QUEUE.append({"author": author, "message": text})
 
 def start_bot_in_thread(gui_queue):
     async def bot_main():
