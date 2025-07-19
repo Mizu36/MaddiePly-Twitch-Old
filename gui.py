@@ -8,7 +8,8 @@ import sys
 import io
 import queue
 import os
-from json_manager import load_settings, save_settings, load_scheduled_messages, save_scheduled_messages, save_prompts, load_prompts
+import json
+from json_manager import load_settings, save_settings, load_scheduled_messages, save_scheduled_messages, save_prompts, load_prompts, load_commands, save_commands
 from audio_player import AUDIO_DEVICES, AudioManager
 import bot_utils
 from eleven_labs_manager import MODELS
@@ -86,6 +87,8 @@ class TwitchBotGUI(tk.Tk):
         self.scheduled_tasks = {}
         self.listening_hotkey = None
         self.bot = None
+        self.queue_cache = None
+        self.played_cache = None
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill='both', expand=True)
@@ -94,16 +97,22 @@ class TwitchBotGUI(tk.Tk):
         self.tasks_tab = ttk.Frame(self.notebook)
         self.prompts_tab = ttk.Frame(self.notebook)
         self.console_tab = ttk.Frame(self.notebook)
+        self.commands_tab = ttk.Frame(self.notebook)
+        self.event_queue = ttk.Frame(self.notebook)
 
         self.notebook.add(self.settings_tab, text='Settings')
         self.notebook.add(self.tasks_tab, text='Scheduled Tasks')
         self.notebook.add(self.prompts_tab, text='GPT Prompts')
         self.notebook.add(self.console_tab, text='Console')
+        self.notebook.add(self.commands_tab, text='Commands')
+        self.notebook.add(self.event_queue, text='TTS Events')
 
         self.create_settings_tab()
         self.create_tasks_tab()
         self.create_prompts_tab()
         self.create_console_tab()
+        self.create_commands_tab()
+        self.create_event_queue_tab()
         
         self.after(100, self.poll_gui_queue)
 
@@ -306,7 +315,8 @@ class TwitchBotGUI(tk.Tk):
             "VOICE_SUMMARIZE_KEY",
             "PLAY_NEXT_KEY",
             "SKIP_CURRENT_KEY",
-            "REPLAY_LAST_KEY"
+            "REPLAY_LAST_KEY",
+            "PAUSE_QUEUE"
         ]:
             frame = ttk.Frame(hotkey_frame)
             frame.pack(fill="x", pady=2)
@@ -465,7 +475,6 @@ class TwitchBotGUI(tk.Tk):
         self.scheduled_tasks = await load_scheduled_messages()
         self.after(0, self.refresh_tasks)
         
-
     def delete_task(self, task_id):
         if not self.bot:
             self.bot = bot_utils.get_bot_instance()
@@ -616,6 +625,229 @@ class TwitchBotGUI(tk.Tk):
         self.console_text.pack(fill='both', expand=True)
         sys.stdout = Redirector(self.console_text)
         sys.stderr = Redirector(self.console_text)
+
+    def create_commands_tab(self):
+        container = ttk.Frame(self.commands_tab)
+        container.pack(fill='both', expand=True, padx=10, pady=10)
+
+        canvas = tk.Canvas(container)
+        scrollbar = ttk.Scrollbar(container, orient='vertical', command=canvas.yview)
+        self.commands_frame = ttk.Frame(canvas)
+
+        self.commands_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=self.commands_frame, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        btn_frame = ttk.Frame(self.commands_tab)
+        btn_frame.pack(pady=5)
+        ttk.Button(btn_frame, text="Add Command", command=self.add_command_popup).pack(side=tk.LEFT, padx=5)
+
+        self.load_commands_into_listbox()
+
+    def load_commands_into_listbox(self):
+        async def _load():
+            try:
+                commands = await load_commands()
+                def update_gui():
+                    for widget in self.commands_frame.winfo_children():
+                        widget.destroy()
+
+                    style = ttk.Style()
+                    style.configure("Card.TFrame", background="#f5f5f5", padding=10)
+                    style.configure("Cmd.TLabel", background="#ffffff", relief="solid", padding=5, anchor='w')
+                    style.configure("Res.TLabel", background="#eef6ff", relief="solid", padding=5, anchor='w', wraplength=600)
+
+                    for cmd, res in commands.items():
+                        # Individual command container
+                        card = ttk.Frame(self.commands_frame, style="Card.TFrame")
+                        card.pack(fill='x', padx=5, pady=5, anchor='w')
+
+                        # Top row: command label + buttons
+                        top_row = ttk.Frame(card, style="Card.TFrame")
+                        top_row.pack(fill='x', anchor='w')
+
+                        # Command label that sizes to content
+                        cmd_label = ttk.Label(top_row, text=cmd, style="Cmd.TLabel", justify='left')
+                        cmd_label.pack(side=tk.LEFT, padx=(0, 10))
+
+                        # Buttons aligned to top-right
+                        btn_frame = ttk.Frame(top_row, style="Card.TFrame")
+                        btn_frame.pack(side=tk.RIGHT, anchor='n')
+                        ttk.Button(btn_frame, text="Edit", command=lambda c=cmd, r=res: self.command_editor_popup(c, r)).pack(side=tk.LEFT, padx=2)
+                        ttk.Button(btn_frame, text="Delete", command=lambda c=cmd: self.delete_command(c)).pack(side=tk.LEFT, padx=2)
+
+                        # Response label with dynamic vertical size and word wrap
+                        res_label = ttk.Label(card, text=res, style="Res.TLabel", justify='left', wraplength=600)
+                        res_label.pack(pady=(5, 0), anchor='w')
+
+                self.after(0, update_gui)
+            except Exception as e:
+                print(f"[ERROR] Loading commands: {e}")
+
+        asyncio.run_coroutine_threadsafe(_load(), self.loop)
+
+    def delete_command(self, cmd):
+        async def _delete():
+            try:
+                data = await load_commands()
+                if cmd in data:
+                    del data[cmd]
+                    await save_commands(data)
+                    if self.bot:
+                        await self.bot.reload_commands()
+                self.after(0, lambda: self.load_commands_into_listbox())
+            except Exception as e:
+                print(f"[ERROR] Deleting command '{cmd}': {e}")
+
+        asyncio.run_coroutine_threadsafe(_delete(), self.loop)
+
+    def add_command_popup(self):
+        self.command_editor_popup()
+
+    def command_editor_popup(self, cmd_text="", res_text=""):
+        popup = tk.Toplevel(self)
+        popup.title("Edit Command" if cmd_text else "Add Command")
+
+        popup.geometry("500x200")  # Wider popup
+        popup.transient(self)
+        popup.grab_set()
+
+        popup.update_idletasks()
+        x = self.winfo_rootx() + self.winfo_width() // 2 - 250
+        y = self.winfo_rooty() + self.winfo_height() // 2 - 100
+        popup.geometry(f"+{x}+{y}")
+
+        ttk.Label(popup, text="Command:").pack(pady=(10, 0))
+        cmd_entry = ttk.Entry(popup, width=60)
+        cmd_entry.pack()
+        cmd_entry.insert(0, cmd_text)
+
+        ttk.Label(popup, text="Response:").pack(pady=(10, 0))
+        res_entry = ttk.Entry(popup, width=60)
+        res_entry.pack()
+        res_entry.insert(0, res_text)
+
+        def save():
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            cmd = cmd_entry.get().strip().lower()
+            res = res_entry.get().strip()
+            if not cmd.startswith("!"):
+                messagebox.showerror("Error", "Command must start with '!'")
+                return
+            if cmd and res:
+                try:
+                    async def save_and_reload():
+                        data = await load_commands()
+                        data[cmd] = res
+                        await save_commands(data)
+                        await self.bot.reload_commands()
+                        self.after(0, lambda: self.load_commands_into_listbox())
+                        popup.destroy()
+                    asyncio.run_coroutine_threadsafe(save_and_reload(), self.loop)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to save: {e}")
+
+        ttk.Button(popup, text="Save", command=save).pack(pady=10)
+
+    
+    def create_event_queue_tab(self):
+        self.event_queue_widgets = {}
+
+        container = ttk.Frame(self.event_queue)
+        container.pack(fill='both', expand=True)
+
+        self.event_queue_frame = ttk.Frame(container)
+        self.event_queue_frame.pack(fill='both', expand=True)
+
+        self.queue_label = ttk.Label(self.event_queue_frame, text="Upcoming Events")
+        self.queue_label.pack()
+
+        self.queue_events_container = ttk.Frame(self.event_queue_frame)
+        self.queue_events_container.pack(fill='x', padx=10)
+
+        self.played_label = ttk.Label(self.event_queue_frame, text="Played Events")
+        self.played_label.pack(pady=(20, 0))
+
+        self.played_events_container = ttk.Frame(self.event_queue_frame)
+        self.played_events_container.pack(fill='x', padx=10)
+
+        self.event_queue.after(500, self.refresh_event_lists_periodically)
+
+    def refresh_event_lists_periodically(self):
+        if self.notebook.index(self.notebook.select()) == self.notebook.tabs().index(str(self.event_queue)):
+            self.refresh_event_lists()
+        self.event_queue.after(500, self.refresh_event_lists_periodically)
+
+    def refresh_event_lists(self):
+        if not self.bot:
+            self.bot = bot_utils.get_bot_instance()
+
+        try:
+            queue = self.bot.event_queue.get_queue()
+            played = self.bot.event_queue.get_played()
+
+            queue_serial = json.dumps(queue, sort_keys=True)
+            played_serial = json.dumps(played, sort_keys=True)
+
+
+            if hasattr(self, "queue_cache") and hasattr(self, "played_cache"):
+                if self.queue_cache == queue_serial and self.played_cache == played_serial:
+                    return
+
+            self.queue_cache = queue_serial
+            self.played_cache = played_serial
+
+            for widget in self.queue_events_container.winfo_children():
+                widget.destroy()
+            for widget in self.played_events_container.winfo_children():
+                widget.destroy()
+
+            for i, event in enumerate(queue):
+                frame = ttk.Frame(self.queue_events_container)
+                frame.pack(fill='x', pady=2)
+                label = ttk.Label(frame, text=f"[{i}] {event.get('event_type', '?')} from {event.get('from_user', '?')} - {event.get('audio', '')}", width=100)
+                label.pack(side=tk.LEFT, padx=5)
+                ttk.Button(frame, text="Play", command=lambda idx=i: self.play_event(idx)).pack(side=tk.LEFT, padx=2)
+                ttk.Button(frame, text="Delete", command=lambda idx=i: self.delete_event(idx, played=False)).pack(side=tk.LEFT, padx=2)
+
+            for i, event in enumerate(played):
+                frame = ttk.Frame(self.played_events_container)
+                frame.pack(fill='x', pady=2)
+                label = ttk.Label(frame, text=f"[{i}] {event.get('event_type', '?')} from {event.get('from_user', '?')} - {event.get('audio', '')}", width=100)
+                label.pack(side=tk.LEFT, padx=5)
+                ttk.Button(frame, text="Replay", command=lambda idx=i: self.replay_event(idx)).pack(side=tk.LEFT, padx=2)
+                ttk.Button(frame, text="Delete", command=lambda idx=i: self.delete_event(idx, played=True)).pack(side=tk.LEFT, padx=2)
+
+        except Exception as e:
+            print(f"[ERROR] While refreshing event lists: {e}")
+
+    def play_event(self, index):
+        if self.bot:
+            asyncio.run_coroutine_threadsafe(self.bot.play_specific_event(index, is_replay=False), self.loop)
+
+    def replay_event(self, index):
+        if self.bot:
+            asyncio.run_coroutine_threadsafe(self.bot.play_specific_event(index, is_replay=True), self.loop)
+
+    def delete_event(self, index, played):
+        if not self.bot:
+            return
+        if played:
+            asyncio.run_coroutine_threadsafe(self.bot.remove_specific_event(index, True), self.loop)
+        else:
+            asyncio.run_coroutine_threadsafe(self.bot.remove_specific_event(index, False), self.loop)
+        self.refresh_event_lists()
+
 
     async def load_all_data(self):
         self.settings = await load_settings()
