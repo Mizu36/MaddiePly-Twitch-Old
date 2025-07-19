@@ -32,10 +32,12 @@ audio_manager = AudioManager()
 
 async def on_subscribe(event: ChannelSubscribeEvent) -> None:
     sub = event.event
+    print(f"[DEBUG]Sub payload: {sub}")
     await get_bot_instance().handle_subscription(sub)
 
 async def on_raid(event: ChannelRaidEvent) -> None:
     raid = event.event
+    print(f"[DEBUG]Raid payload: {raid}")
     channel_id = raid.from_broadcaster_user_id
     game_name = None
     for channel_info in await twitch.get_channel_information(channel_id):
@@ -45,20 +47,22 @@ async def on_raid(event: ChannelRaidEvent) -> None:
 
 async def on_points(event: ChannelPointsAutomaticRewardRedemptionAddEvent) -> None:
     redemption = event.event
+    print(f"[DEBUG]Point redemption payload: {redemption}")
     await get_bot_instance().handle_channel_points(redemption)
 
 async def on_points_custom(event: ChannelPointsCustomRewardRedemptionAddEvent) -> None:
     redemption = event.event
+    print(f"[DEBUG]Custom point redemption payload: {redemption}")
     await get_bot_instance().handle_custom_channel_points(redemption)
 
 async def on_bits(event: ChannelCheerEvent) -> None:
     cheer = event.event
+    print(f"[DEBUG]Bits payload: {cheer}")
     await get_bot_instance().handle_bits(cheer)
 
 async def on_gift_sub(event: ChannelSubscriptionGiftEvent) -> None:
-    if DEBUG:
-        print("[DEBUG]GIFT SUB")
     gift = event.event
+    print(f"[DEBUG]Gift payload: {gift}")
     count = gift.total
     cumulative = gift.cumulative_total
     if gift.is_anonymous:
@@ -68,11 +72,8 @@ async def on_gift_sub(event: ChannelSubscriptionGiftEvent) -> None:
     await get_bot_instance().handle_gift_subscription(gifter_name = gifter_name, gift_count = count, gift_cumulative = cumulative)
 
 async def on_sub_message(event: ChannelSubscriptionMessageEvent) -> None:
-    if DEBUG:
-        print(f"[DEBUG]On_sub_message: {event}")
     sub_message = event.event
-    if DEBUG:
-        print(f"[DEBUG]On_sub_message: {sub_message}")
+    print(f"[DEBUG]Sub Message payload: {sub_message}")
     await get_bot_instance().handle_subscription_message(sub_message)
 
 def dict_to_namespace(d):
@@ -122,8 +123,8 @@ class FakeEvent():
 
 async def test():
     settings = await load_settings()
-    debug = settings["Debug"]
-
+    #debug = settings["Debug"]
+    debug = False
     event_bits_data = {
     "subscription": {
         "id": "f1c2a387-161a-49f9-a165-0f21d7a4e1c4",
@@ -329,12 +330,12 @@ async def test():
     if debug:
         event_object = dict_to_namespace(event_subscribe_message_data)
         #fake_event = FakeEvent(event_subscribe_message)
-        await on_sub_message(event_object)
+        asyncio.create_task(on_sub_message(event_object))
 
         event_object = dict_to_namespace(event_bits_data)
         #BITS WORKING AS INTENDED
         fake_event = FakeEvent(event_object)
-        await on_bits(fake_event)
+        asyncio.create_task(on_bits(fake_event))
         
         #event_object = dict_to_namespace(event_gifted_sub_data)
         #GIFTED_SUB WORKING AS INTENDED
@@ -344,22 +345,22 @@ async def test():
         event_object = dict_to_namespace(event_subscribe_data)
 
         fake_event = FakeEvent(event_object)
-        await on_subscribe(fake_event)
+        asyncio.create_task(on_subscribe(fake_event))
 
         event_object = dict_to_namespace(event_raid_data)
 
         fake_event = FakeEvent(event_object)
-        await on_raid(fake_event)
+        asyncio.create_task(on_raid(fake_event))
 
         event_object = dict_to_namespace(event_bits_no_message_data)
 
         fake_event = FakeEvent(event_object)
-        await on_bits(fake_event)
+        asyncio.create_task(on_bits(fake_event))
 
         event_object = dict_to_namespace(event_bits_anonymous_data)
 
         fake_event = FakeEvent(event_object)
-        await on_bits(fake_event)
+        asyncio.create_task(on_bits(fake_event))
 
 
 
