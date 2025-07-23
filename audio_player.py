@@ -7,12 +7,14 @@ import soundfile as sf
 from mutagen.mp3 import MP3
 from pydub import AudioSegment
 from bot_utils import DEBUG
+from json_manager import load_settings
 
 AUDIO_DEVICES = []
 
 class AudioManager:
     def __init__(self):
         self.output_device = None
+        self.cached_output_device = None
         self._should_stop = False
         self._is_playing = False
         self.device_object = None
@@ -37,6 +39,7 @@ class AudioManager:
         return devices
 
     def set_output_device(self, device_name_or_index):
+        self.cached_output_device = device_name_or_index
         devices = self.list_output_devices()
         if isinstance(device_name_or_index, int):
             if 0 <= device_name_or_index < len(devices):
@@ -67,8 +70,10 @@ class AudioManager:
     def is_playing(self):
         return self._is_playing
 
-    def play_audio(self, file_path, sleep_during_playback=True, delete_file=False, play_using_music=True):
+    def play_audio(self, file_path, sleep_during_playback=True, delete_file=False, play_using_music=True, output_device = None):
         try:
+            if output_device and output_device != self.cached_output_device:
+                self.set_output_device(output_device)
             self._is_playing = True
             if not pygame.mixer.get_init():
                 self.init_mixer()
