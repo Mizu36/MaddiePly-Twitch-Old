@@ -8,7 +8,9 @@ from bot_utils import DEBUG
 load_dotenv()
 
 DEFAULT_MODEL = 'gpt-4o'
+CONVERATIONAL_MODEL = "ft:gpt-4o-2024-08-06:mizugaming:maddie:BllhDqyb"
 API_KEY = os.getenv("OPENAI_API_KEY")
+BOT_DETECTION_PROMPT = {"role": "system", "content": "You are a twitch moderator who's sole job is to review a chatter's message if it is their first time chatting. You are checking if they are a bot, scammer, or spammer. You will provide a single word response, Yes, No, or Maybe. Saying Yes means you think they are a bot, scammer, or spammer. No means they are not. And Maybe means you will need more context to determine, in which case I will append more of their messages as they come in until you change your answer. Always respond with a single word, Yes, No, Maybe, so that my program can automatically take action depending on your answer."}
 
 
 def num_of_tokens(messages, model = DEFAULT_MODEL):
@@ -40,7 +42,7 @@ class OpenAiManager:
             exit("[ERROR]Ooops! You forgot to set OPENAI_API_KEY in your environment!")
 
     # Asks a question with no chat history
-    async def chat(self, messages):
+    def chat(self, messages, conversational: bool):
         if not messages or not isinstance(messages, list):
             print("[ERROR]Didn't receive input!")
             return
@@ -52,20 +54,21 @@ class OpenAiManager:
 
         print("[orange]Asking ChatGPT a question...")
 
-        def blocking_call():
-            return self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages
-                )
+
 
         # Process the answer
-        completion = await asyncio.to_thread(blocking_call)
+        completion = self.client.chat.completions.create(
+                        model=CONVERATIONAL_MODEL if conversational else DEFAULT_MODEL,
+                        messages=messages
+                        )
+        
         openai_answer = completion.choices[0].message.content
         print(f"[green]{openai_answer}")
         return openai_answer
+    
 
     # Asks a question that includes the full conversation history
-    async def chat_with_history(self, prompt=""):
+    def chat_with_history(self, prompt="", conversational: bool = False):
         if not prompt:
             print("[ERROR]Didn't receive input!")
             return
@@ -81,14 +84,12 @@ class OpenAiManager:
             print(f"[orange]Popped a message! New token length is: {num_of_tokens(self.chat_history)}")
 
         print("[orange]Asking ChatGPT a question...")
-        def blocking_call():
-            return self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=self.chat_history
-                )
 
         # Add this answer to our chat history
-        completion = await asyncio.to_thread(blocking_call)
+        completion = self.client.chat.completions.create(
+                        model=CONVERATIONAL_MODEL if conversational else DEFAULT_MODEL,
+                        messages=self.chat_history
+                        )
         
         self.chat_history.append({"role": completion.choices[0].message.role, "content": completion.choices[0].message.content})
 
@@ -96,3 +97,34 @@ class OpenAiManager:
         openai_answer = completion.choices[0].message.content
         print(f"[green]{openai_answer}")
         return openai_answer
+    
+    def bot_detector(self, message):
+        if not message:
+            print("[ERROR]Called without input")
+            return
+        
+        messages = [BOT_DETECTION_PROMPT, {"role": "user", "content": message}]
+
+        completion = self.client.chat.completions.create(
+            model = "ft:gpt-4o-mini-2024-07-18:mizugaming:bot-detector:Bv9zPaZq",
+            messages=messages
+        )
+        openai_answer = completion.choices[0].message.content
+        print(openai_answer)
+
+        if openai_answer.lower().startswith("yes"):
+            if DEBUG:
+                print(f"[DEBUG]First time message is spam.")
+            return True
+        elif openai_answer.lower().startswith("no"):
+            if DEBUG:
+                print(f"[DEBUG]First time message is not spam.")
+            return False
+        elif openai_answer.lower().startswith("maybe"):
+            if DEBUG:
+                print(f"[DEBUG]Not sure if first message is spam.")
+            return 3
+        else:
+            if DEBUG:
+                print(f"[DEBUG]Invalid response from bot-detection AI: {openai_answer}")
+            return 3
