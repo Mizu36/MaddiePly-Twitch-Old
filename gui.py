@@ -82,7 +82,7 @@ class TwitchBotGUI(tk.Tk):
         self.title("MaddiePly Twitch Bot")
         icon_path = os.path.join(os.path.dirname(__file__), "bot_icon.ico")
         self.iconbitmap(icon_path)
-        self.geometry("700x950")
+        self.geometry("750x950")
         self.settings = {}
         self.scheduled_tasks = {}
         self.listening_hotkey = None
@@ -99,6 +99,7 @@ class TwitchBotGUI(tk.Tk):
         self.console_tab = ttk.Frame(self.notebook)
         self.commands_tab = ttk.Frame(self.notebook)
         self.event_queue = ttk.Frame(self.notebook)
+        self.tools_tab = ttk.Frame(self.notebook)
 
         self.notebook.add(self.settings_tab, text='Settings')
         self.notebook.add(self.tasks_tab, text='Scheduled Tasks')
@@ -106,6 +107,7 @@ class TwitchBotGUI(tk.Tk):
         self.notebook.add(self.console_tab, text='Console')
         self.notebook.add(self.commands_tab, text='Commands')
         self.notebook.add(self.event_queue, text='TTS Events')
+        self.notebook.add(self.tools_tab, text="Tools")
 
         self.create_settings_tab()
         self.create_tasks_tab()
@@ -113,10 +115,34 @@ class TwitchBotGUI(tk.Tk):
         self.create_console_tab()
         self.create_commands_tab()
         self.create_event_queue_tab()
+        self.create_tools_tab()
         
         self.after(100, self.poll_gui_queue)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def bind_mousewheel(self, widget, target_canvas):
+        def _on_mousewheel(event):
+            # Windows and macOS
+            if hasattr(event, 'delta'):
+                target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            # Linux
+            elif event.num == 4:
+                target_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                target_canvas.yview_scroll(1, "units")
+
+        # Windows/macOS
+        widget.bind("<Enter>", lambda e: widget.bind_all("<MouseWheel>", _on_mousewheel))
+        widget.bind("<Leave>", lambda e: widget.unbind_all("<MouseWheel>"))
+
+        # Linux
+        widget.bind("<Enter>", lambda e: widget.bind_all("<Button-4>", _on_mousewheel))
+        widget.bind("<Leave>", lambda e: widget.unbind_all("<Button-4>"))
+        widget.bind("<Enter>", lambda e: widget.bind_all("<Button-5>", _on_mousewheel))
+        widget.bind("<Leave>", lambda e: widget.unbind_all("<Button-5>"))
+
+
 
     def poll_gui_queue(self):
         try:
@@ -149,6 +175,10 @@ class TwitchBotGUI(tk.Tk):
 
         canvas.create_window((0, 0), window=self.settings_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        self.bind_mousewheel(self.settings_frame, canvas)
+
+
+
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -214,7 +244,8 @@ class TwitchBotGUI(tk.Tk):
             ("OBS Assistant Stationary Object Name", "OBS Assistant Stationary Object Name"),
             ("Ad Length (seconds)", "Ad Length (seconds)"),
             ("Ad Interval (minutes)", "Ad Interval (minutes)"),
-            ("Seconds Between Events", "Seconds Between Events")
+            ("Seconds Between Events", "Seconds Between Events"),
+            ("Progress Bar Name", "Progress Bar Name")
         ]:
             if label == "Audio Output Device":
                 ttk.Label(basic_frame, text=label).pack(anchor="w", padx=5, pady=2)
@@ -245,8 +276,6 @@ class TwitchBotGUI(tk.Tk):
                 add_entry(basic_frame, label, key)
             else:
                 add_entry(basic_frame, label, key, readonly=True)
-
-
 
         # --- Elevenlabs Synthesizer Model Combobox ---
         ttk.Label(basic_frame, text="Elevenlabs Synthesizer Model").pack(anchor="w", padx=5, pady=2)
@@ -302,6 +331,12 @@ class TwitchBotGUI(tk.Tk):
             variable=self.auto_ad_var
         ).pack(anchor="w", padx=5, pady=2)
 
+        self.streamathon_var = tk.BooleanVar()
+        ttk.Checkbutton(
+            basic_frame, text="Streamathon Mode",
+            variable=self.streamathon_var
+        ).pack(anchor="w", padx=5, pady=2)
+
         self.hotkey_widgets = {}
         self.hotkey_labels = {}
 
@@ -309,13 +344,13 @@ class TwitchBotGUI(tk.Tk):
         self.settings_tab.bind_all('<KeyRelease>', self.capture_hotkey_release)
 
         for hotkey_name in [
-            "10_MESSAGES_RESPOND_KEY",
             "LISTEN_AND_RESPOND_KEY",
             "END_LISTEN_KEY",
             "VOICE_SUMMARIZE_KEY",
             "PLAY_NEXT_KEY",
             "SKIP_CURRENT_KEY",
             "REPLAY_LAST_KEY",
+            "PLAY_AD",
             "PAUSE_QUEUE"
         ]:
             frame = ttk.Frame(hotkey_frame)
@@ -377,44 +412,46 @@ class TwitchBotGUI(tk.Tk):
     def save_settings(self):
         if not self.bot:
             self.bot = bot_utils.get_bot_instance()
+
         # Top-level settings
         for key, widget in self.settings_widgets.items():
             if isinstance(widget, dict):
-                continue  # skip nested, handled below
+                continue
             value = widget.get()
-            # Convert to int if it's the Audio Output Device and is a digit
-            if (key == "Audio Output Device" or key == "Raid Threshold" or key == "Ad Length (seconds)" or key == "Ad Interval (minutes)" or key == "Seconds Between Events") and value.isdigit():
+            if key in ["Audio Output Device", "Raid Threshold", "Ad Length (seconds)", "Ad Interval (minutes)", "Seconds Between Events"] and value.isdigit():
                 self.settings[key] = int(value)
+            else:
+                self.settings[key] = value
+
         self.settings["Event Queue Enabled"] = self.audio_queue_var.get()
         self.settings["Auto Ad Enabled"] = self.auto_ad_var.get()
+        self.settings["Streamathon Mode"] = self.streamathon_var.get()
         self.settings["Elevenlabs Synthesizer Model"] = self.settings_widgets["Elevenlabs Synthesizer Model"].get()
         self.settings["Audio Output Device"] = self.settings_widgets["Audio Output Device"].get()
 
         # Nested: Resub
-        if "Resub" not in self.settings:
-            self.settings["Resub"] = {}
+        self.settings.setdefault("Resub", {})
         for key, widget in self.settings_widgets.get("Resub", {}).items():
             self.settings["Resub"][key] = int(widget.get()) if widget.get().isdigit() else widget.get()
 
         # Nested: Bits
-        if "Bits" not in self.settings:
-            self.settings["Bits"] = {}
+        self.settings.setdefault("Bits", {})
         for key, widget in self.settings_widgets.get("Bits", {}).items():
             self.settings["Bits"][key] = int(widget.get()) if widget.get().isdigit() else widget.get()
 
-        try:
-            asyncio.run_coroutine_threadsafe(save_settings(self.settings), self.loop)
-        except RuntimeError:
-            asyncio.run(save_settings(self.settings))
+        # Instead of asyncio.run or run_coroutine_threadsafe
+        async def do_save():
+            try:
+                await save_settings(self.settings)
+                await self.bot.reload_global_variable()
+                self.after(0, self.populate_settings_widgets)
+                self.after(0, lambda: messagebox.showinfo("Saved", "Settings saved successfully."))
+            except Exception as e:
+                print(f"[ERROR] Saving settings: {e}")
 
-        try:
-            asyncio.run_coroutine_threadsafe(self.bot.reload_global_variable(), self.loop)
-        except Exception as e:
-            print(f"[ERROR]Couldn't refresh variables in bot:\n{e}")
+        # Schedule coroutine safely
+        self.loop.call_soon_threadsafe(lambda: asyncio.create_task(do_save()))
 
-
-        messagebox.showinfo("Saved", "Settings saved successfully.")
-        self.after(0, self.populate_settings_widgets)
 
     def create_tasks_tab(self):
         # Create a canvas and a vertical scrollbar for scrolling
@@ -434,6 +471,7 @@ class TwitchBotGUI(tk.Tk):
 
         canvas.create_window((0, 0), window=self.tasks_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        self.bind_mousewheel(self.tasks_frame, canvas)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -576,6 +614,7 @@ class TwitchBotGUI(tk.Tk):
 
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        self.bind_mousewheel(scrollable_frame, canvas)
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -643,6 +682,7 @@ class TwitchBotGUI(tk.Tk):
 
         canvas.create_window((0, 0), window=self.commands_frame, anchor='nw')
         canvas.configure(yscrollcommand=scrollbar.set)
+        self.bind_mousewheel(self.commands_frame, canvas)
 
         canvas.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
@@ -848,6 +888,111 @@ class TwitchBotGUI(tk.Tk):
             asyncio.run_coroutine_threadsafe(self.bot.remove_specific_event(index, False), self.loop)
         self.refresh_event_lists()
 
+    def create_tools_tab(self):
+        ttk.Label(self.tools_tab, text="Trigger Actions", font=("Segoe UI", 12, "bold")).pack(pady=10)
+
+        ask_button = ttk.Button(self.tools_tab, text="Ask MaddiePly", command=self.ask_maddieply)
+        ask_button.pack(pady=5)
+
+        summarize_button = ttk.Button(self.tools_tab, text="Summarize Chat", command=self.summarize_chat)
+        summarize_button.pack(pady=5)
+
+        trigger_ad_button = ttk.Button(self.tools_tab, text="Trigger Ad Break", command=self.trigger_ad)
+        trigger_ad_button.pack(pady=5)
+
+        ttk.Separator(self.tools_tab).pack(fill="x", pady=10)
+
+        # --- Stream Tools Section ---
+        tools_frame = ttk.LabelFrame(self.tools_tab, text="Stream Tools")
+        tools_frame.pack(padx=10, pady=10, fill="x")
+
+        # Save transform buttons
+        on_screen_button = ttk.Button(tools_frame, text="Save On Screen Location", command=self.capture_assistant_location_onscreen)
+        on_screen_button.pack(pady=5, fill="x")
+
+        off_screen_button = ttk.Button(tools_frame, text="Save Off Screen Location", command=self.capture_assistant_location_offscreen)
+        off_screen_button.pack(pady=5, fill="x")
+
+        prog_bar_button = ttk.Button(tools_frame, text="Save Progress Bar Transform", command=self.save_prog_bar_transform)
+        prog_bar_button.pack(pady=5, fill="x")
+
+        # Manual Donation Entry
+        ttk.Label(tools_frame, text="Manual Donation Entry", font=("Segoe UI", 10, "bold")).pack(pady=(10, 0))
+
+        donation_frame = ttk.Frame(tools_frame)
+        donation_frame.pack(pady=5)
+
+        self.donation_var = tk.StringVar()
+
+        donation_entry = ttk.Entry(donation_frame, textvariable=self.donation_var, width=15)
+        donation_entry.pack(side="left", padx=(0, 5))
+
+        def submit_donation():
+            value = self.donation_var.get().strip()
+            try:
+                amount = float(value)
+                if amount <= 0:
+                    raise ValueError
+                if not self.bot:
+                    self.bot = bot_utils.get_bot_instance()
+                asyncio.run_coroutine_threadsafe(self.bot.manual_donation_entry(amount), self.loop)
+                self.donation_var.set("")
+            except ValueError:
+                messagebox.showerror("Invalid Input", "Please enter a positive number.")
+
+        submit_button = ttk.Button(donation_frame, text="Submit", command=submit_donation)
+        submit_button.pack(side="left")
+
+
+
+
+    def ask_maddieply(self):
+        try:
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(self.bot.ask(), self.loop)
+        except Exception as e:
+            print(f"[ERROR]Failed to call ask_maddieply: {e}")
+
+    def summarize_chat(self):
+        try:
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(self.bot.summarize(), self.loop)
+        except Exception as e:
+            print(f"[ERROR]Failed to call summarize_chat: {e}")
+
+    def trigger_ad(self):
+        try:
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(self.bot.ad(), self.loop)
+        except Exception as e:
+            print(f"[ERROR]Failed to call trigger_ad: {e}")
+
+    def capture_assistant_location_onscreen(self):
+        try:
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(self.bot.obs_capture_location(True), self.loop)
+        except Exception as e:
+            print(f"[ERROR]Failed to call obs_capture_location (onscreen): {e}")
+
+    def capture_assistant_location_offscreen(self):
+        try:
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(self.bot.obs_capture_location(False), self.loop)
+        except Exception as e:
+            print(f"[ERROR]Failed to call obs_capture_location (offscreen): {e}")
+
+    def save_prog_bar_transform(self):
+        try:
+            if not self.bot:
+                self.bot = bot_utils.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(self.bot.obs_capture_transform(), self.loop)
+        except Exception as e:
+            print(f"[ERROR]Failed to call obs_capture_transform (progress bar): {e}")
 
     async def load_all_data(self):
         self.settings = await load_settings()
@@ -871,6 +1016,8 @@ class TwitchBotGUI(tk.Tk):
             if key in ["Bot Nickname", "Broadcaster Channel", "Broadcaster ID"]:
                 entry.config(state="readonly")
         self.audio_queue_var.set(self.settings.get("Event Queue Enabled", False))
+        self.auto_ad_var.set(self.settings.get("Auto Ad Enabled", False))
+        self.streamathon_var.set(self.settings.get("Streamathon Mode", False))
         self.debug_var.set(self.settings.get("Debug", False))
         # Nested: Resub
         for key, widget in self.settings_widgets.get("Resub", {}).items():
