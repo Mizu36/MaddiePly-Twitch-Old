@@ -20,6 +20,10 @@ CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("TWITCH_APP_SECRET")
 TWITCH_BROADCASTER_TOKEN = None
 TWITCH_BROADCASTER_REFRESH_TOKEN = None
+AD_INTERVAL = None
+AD_LENGTH = None
+AUTO_AD_ENABLED = None
+AD_TIMER = None
 
 #Move non secrets out of .env and change the code
 
@@ -63,13 +67,7 @@ async def on_bits(event: ChannelCheerEvent) -> None:
 async def on_gift_sub(event: ChannelSubscriptionGiftEvent) -> None:
     gift = event.event
     print(f"[DEBUG]Gift payload: {gift}")
-    count = gift.total
-    cumulative = gift.cumulative_total
-    if gift.is_anonymous:
-        gifter_name = "Anonymous"
-    else:
-        gifter_name = gift.user_name
-    await get_bot_instance().handle_gift_subscription(gifter_name = gifter_name, gift_count = count, gift_cumulative = cumulative)
+    await get_bot_instance().handle_gift_subscription(gift)
 
 async def on_sub_message(event: ChannelSubscriptionMessageEvent) -> None:
     sub_message = event.event
@@ -83,30 +81,57 @@ def dict_to_namespace(d):
         return [dict_to_namespace(i) for i in d]
     return d
 
+async def load_global_variables():
+    global AD_INTERVAL, AD_LENGTH, AUTO_AD_ENABLED, AD_TIMER
+    settings = await load_settings()
+    AUTO_AD_ENABLED = settings["Auto Ad Enabled"]
+    AD_INTERVAL = settings["Ad Interval (minutes)"]
+    AD_LENGTH = settings["Ad Length (seconds)"]
+
+async def reload_global_variables():
+    global AD_INTERVAL, AD_LENGTH, AUTO_AD_ENABLED, AD_TIMER
+    settings = await load_settings()
+    if not AUTO_AD_ENABLED:
+        if settings["Auto Ad Enabled"]:
+            AUTO_AD_ENABLED = settings["Auto Ad Enabled"]
+            AD_TIMER = asyncio.create_task(start_ad_timer())
+    elif AUTO_AD_ENABLED:
+        if not settings["Auto Ad Enabled"]:
+            AUTO_AD_ENABLED = settings["Auto Ad Enabled"]
+            if AD_TIMER:
+                AD_TIMER.cancel()
+    AD_INTERVAL = settings["Ad Interval (minutes)"]
+    AD_LENGTH = settings["Ad Length (seconds)"]
+
 ad_reset_event = asyncio.Event()
 
 async def start_ad_timer():
+    print("Ad Timer started!")
     global ad_reset_event
-    while True:
-        settings = await load_settings()
-        if settings["Auto Ad Enabled"]:
-            timer_goal = int(settings["Ad Interval (minutes)"])
-            if not timer_goal or timer_goal == 0:
-                if DEBUG:
-                    print("[DEBUG]Timer not set or set to 0.")
+    try:
+        while True:
+            if AUTO_AD_ENABLED:
+                timer_goal = int(AD_INTERVAL)
+                if not timer_goal or timer_goal == 0:
+                    if DEBUG:
+                        print("[DEBUG]Timer not set or set to 0.")
+                    return
+                length = int(AD_LENGTH)
+                ad_reset_event.clear()
+                try:
+                    await asyncio.wait_for(ad_reset_event.wait(), timeout = timer_goal * 60)
+                    continue
+                except asyncio.TimeoutError:
+                    await trigger_ad(length)
+                    await asyncio.sleep(length)
+            else:
                 return
-            length = int(settings["Ad Length (seconds)"])
-            ad_reset_event.clear()
-            try:
-                await asyncio.wait_for(ad_reset_event.wait(), timeout = timer_goal * 60)
-                continue
-            except asyncio.TimeoutError:
-                await trigger_ad(length)
-                await asyncio.sleep(length)
+    except asyncio.CancelledError:
+        print("[DEBUG]Ad timer task cancelled.")
 
 async def trigger_ad(length: int = 60):
     settings = await load_settings()
-    length = settings["Ad Length (seconds)"]
+    length = int(settings.get("Ad Length (seconds)", 60))
     broadcaster_id = settings["Broadcaster ID"]
 
     try: 
@@ -123,8 +148,8 @@ class FakeEvent():
 
 async def test():
     settings = await load_settings()
-    #debug = settings["Debug"]
-    debug = False
+    debug = settings["Debug"]
+    #debug = False
     event_bits_data = {
     "subscription": {
         "id": "f1c2a387-161a-49f9-a165-0f21d7a4e1c4",
@@ -328,46 +353,48 @@ async def test():
     }
 }
     if debug:
+
         event_object = dict_to_namespace(event_subscribe_message_data)
-        #fake_event = FakeEvent(event_subscribe_message)
+
+        #fake_event = FakeEvent(event_subscribe_message_data)
         asyncio.create_task(on_sub_message(event_object))
 
-        event_object = dict_to_namespace(event_bits_data)
-        #BITS WORKING AS INTENDED
-        fake_event = FakeEvent(event_object)
-        asyncio.create_task(on_bits(fake_event))
-        
         #event_object = dict_to_namespace(event_gifted_sub_data)
         #GIFTED_SUB WORKING AS INTENDED
         #fake_event = FakeEvent(event_object)
         #await on_gift_sub(fake_event)
 
-        event_object = dict_to_namespace(event_subscribe_data)
+        #event_object = dict_to_namespace(event_subscribe_data)
 
-        fake_event = FakeEvent(event_object)
-        asyncio.create_task(on_subscribe(fake_event))
+        #fake_event = FakeEvent(event_object)
+        #asyncio.create_task(on_subscribe(fake_event))
 
-        event_object = dict_to_namespace(event_raid_data)
+        #event_object = dict_to_namespace(event_raid_data)
 
-        fake_event = FakeEvent(event_object)
-        asyncio.create_task(on_raid(fake_event))
+        #fake_event = FakeEvent(event_object)
+        #asyncio.create_task(on_raid(fake_event))
 
-        event_object = dict_to_namespace(event_bits_no_message_data)
+        #event_object = dict_to_namespace(event_bits_no_message_data)
 
-        fake_event = FakeEvent(event_object)
-        asyncio.create_task(on_bits(fake_event))
+        #fake_event = FakeEvent(event_object)
+        #asyncio.create_task(on_bits(fake_event))
 
-        event_object = dict_to_namespace(event_bits_anonymous_data)
+        #event_object = dict_to_namespace(event_bits_anonymous_data)
 
-        fake_event = FakeEvent(event_object)
-        asyncio.create_task(on_bits(fake_event))
+        #fake_event = FakeEvent(event_object)
+        #asyncio.create_task(on_bits(fake_event))
 
+        #event_object = dict_to_namespace(event_bits_data)
+
+        #fake_event = FakeEvent(event_object)
+        #asyncio.create_task(on_bits(fake_event))
 
 
 async def main():
 
     global TWITCH_BROADCASTER_TOKEN
     global TWITCH_BROADCASTER_REFRESH_TOKEN
+    global AD_TIMER
     TWITCH_BROADCASTER_REFRESH_TOKEN = get_refresh_token("broadcaster")
     TWITCH_BROADCASTER_TOKEN = refresh_token("broadcaster", CLIENT_ID, CLIENT_SECRET)
     await twitch.authenticate_app([])
@@ -411,6 +438,7 @@ async def main():
 
     settings = await load_settings()
     channel_id = settings["Broadcaster ID"] #For eventsub, not twitch chat
+    
 
     await eventsub.listen_channel_subscribe(channel_id, on_subscribe)
     await eventsub.listen_channel_raid(on_raid, channel_id)
@@ -420,7 +448,9 @@ async def main():
     await eventsub.listen_channel_subscription_gift(channel_id, on_gift_sub)
     await eventsub.listen_channel_subscription_message(channel_id, on_sub_message)
 
-    asyncio.create_task(start_ad_timer())
+    await load_global_variables()
+    if AUTO_AD_ENABLED:
+        AD_TIMER = asyncio.create_task(start_ad_timer())
 
     print("[green]Listening for Twitch EventSub WebSocket events...")
     await test()
