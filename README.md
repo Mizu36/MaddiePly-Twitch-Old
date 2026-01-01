@@ -1,0 +1,1 @@
+This repository is of an old version of my twitch bot I made while I was still learning python. If this interests you, go visit my newer repository for a completely refactored, and feature heavy version.
